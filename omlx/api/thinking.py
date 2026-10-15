@@ -11,8 +11,9 @@ their chain-of-thought reasoning in <think>...</think> tags.
 
 import codecs
 import re
+import weakref
 from collections.abc import Callable, Sequence
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 # Tags used for thinking blocks
 _OPEN_TAG = "<think>"
@@ -55,11 +56,88 @@ _GPT2_BYTE_DECODER = _gpt2_byte_decoder()
 # tokens looking for a sentence or line end before the close is forced.
 THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS = 40
 
-# Reasoning boundary for the thinking-budget grace window: a piece that ends
-# a sentence once trailing whitespace, closing quotes/brackets and markdown
-# emphasis are stripped (a newline anywhere in the piece also counts).
-_SENTENCE_END_CHARS = (".", "!", "?", "\u3002", "\uff01", "\uff1f")
+# A Western ``.`` ``!`` ``?`` only ends a sentence when the next token
+# starts with whitespace ("3.5", "e.g", "file.py" do not). After such a
+# token the grace window closes at the next position when the model puts
+# more than this probability mass on whitespace-led tokens.
+THINKING_BUDGET_FINISH_SENTENCE_WHITESPACE_THRESHOLD = 0.5
+
+# Reasoning boundary for the thinking-budget grace window, judged on a piece
+# once trailing whitespace, closing quotes/brackets and markdown emphasis are
+# stripped. A newline anywhere in the piece, or a CJK full stop, is a hard
+# boundary; a Western sentence end is a soft one (see the threshold above).
+_HARD_SENTENCE_END_CHARS = ("\u3002", "\uff01", "\uff1f")
+_SOFT_SENTENCE_END_CHARS = (".", "!", "?")
 _SENTENCE_TRAILING_CHARS = " \t\"'*)]}\u201d\u2019\u300d\u300f\uff09"
+
+_BOUNDARY_NONE = 0
+_BOUNDARY_HARD = 1
+_BOUNDARY_SOFT = 2
+
+_BYTE_FALLBACK_PIECE = re.compile(r"<0x([0-9A-Fa-f]{2})>")
+_SENTENCEPIECE_SPACE = "\u2581"
+
+
+def _piece_starts_with_whitespace(piece) -> bool:
+    """True when a vocabulary piece decodes to text led by whitespace.
+
+    Handles SentencePiece (``\u2581`` word marker, ``<0x0A>`` byte
+    fallback), GPT-2 byte-level BPE (``\u0120`` space, ``\u010a`` newline)
+    and plain pieces. A zero-width space does not count.
+    """
+    if not piece:
+        return False
+    if isinstance(piece, bytes):
+        text = piece.decode("utf-8", errors="ignore")
+        return bool(text) and text[0].isspace()
+    first = piece[0]
+    if first == _SENTENCEPIECE_SPACE:
+        return True
+    fallback = _BYTE_FALLBACK_PIECE.match(piece)
+    if fallback is not None:
+        return chr(int(fallback.group(1), 16)).isspace()
+    byte = _GPT2_BYTE_DECODER.get(first)
+    if byte is not None:
+        return byte < 0x80 and chr(byte).isspace()
+    return first.isspace() and first != "\u200b"
+
+
+# tokenizer -> {logits vocab size: mask or None}
+_WHITESPACE_MASKS: "weakref.WeakKeyDictionary[Any, dict]" = weakref.WeakKeyDictionary()
+
+
+def leading_whitespace_mask(tokenizer, vocab_size: int):
+    """Boolean ``(vocab_size,)`` mask of token ids whose piece starts with
+    whitespace, cached per tokenizer and logits width.
+
+    Ids past the tokenizer's vocabulary (padded embedding rows) are False.
+    Returns ``None`` when the vocabulary cannot be read or is wider than the
+    logits (e.g. a reduced draft vocabulary), so callers can fall back.
+    """
+    try:
+        cache = _WHITESPACE_MASKS.setdefault(tokenizer, {})
+    except TypeError:
+        cache = {}
+    if vocab_size in cache:
+        return cache[vocab_size]
+    mask = None
+    try:
+        import mlx.core as mx
+
+        try:
+            size = len(tokenizer)
+        except TypeError:
+            size = int(tokenizer.vocab_size)
+        if 0 < size <= vocab_size:
+            pieces = tokenizer.convert_ids_to_tokens(list(range(size)))
+            flags = [_piece_starts_with_whitespace(p) for p in pieces]
+            if len(flags) == size:
+                flags.extend([False] * (vocab_size - size))
+                mask = mx.array(flags, dtype=mx.bool_)
+    except Exception:
+        mask = None
+    cache[vocab_size] = mask
+    return mask
 
 
 def _safe_tokenizer_attr(tokenizer, attr: str, default=None):
@@ -463,6 +541,10 @@ class ThinkingBudgetProcessor:
             token ends a line or a sentence, then force the close sequence;
             force it anyway after this many extra tokens. ``None``/``0``
             closes immediately at the budget.
+        whitespace_mask: ``vocab_size -> mask | None`` lookup (see
+            :func:`leading_whitespace_mask`). With it, a Western ``.!?``
+            only closes the grace window when the next token is likely
+            whitespace-led; without it, such a token closes at once.
     """
 
     def __init__(
@@ -475,6 +557,7 @@ class ThinkingBudgetProcessor:
         token_to_piece: Optional[Callable[[int], str | bytes | None]] = None,
         start_in_thinking: bool = True,
         grace_tokens: int | None = None,
+        whitespace_mask: Callable[[int], Any] | None = None,
     ):
         self._think_end_ids = think_end_token_ids
         # Full force sequence: \n + </think> + \n\n (matches training pattern)
@@ -485,6 +568,7 @@ class ThinkingBudgetProcessor:
         )
         self._budget = budget
         self._grace = max(0, int(grace_tokens or 0))
+        self._whitespace_mask = whitespace_mask
         self._think_start_id = think_start_token_id
         self._token_to_piece = token_to_piece
 
@@ -503,8 +587,11 @@ class ThinkingBudgetProcessor:
         # Boundary grace window (only touched when ``self._grace > 0``)
         self._waiting_boundary: bool = False
         self._grace_used: int = 0
-        self._last_token_boundary: bool = False
+        self._last_token_boundary: int = _BOUNDARY_NONE
         self._boundary_tail: bytes = b""
+        # A soft boundary was accepted: the next position peeks at the
+        # whitespace mass and lazily selects the forced close.
+        self._peek_pending: bool = False
 
     def __call__(self, tokens, logits):
         """mlx-lm logits processor: (tokens, logits) -> logits."""
@@ -528,7 +615,12 @@ class ThinkingBudgetProcessor:
         if self._forcing:
             return self._force_next_token(logits, mx)
 
-        if self._waiting_utf8 or self._waiting_boundary:
+        if self._waiting_utf8:
+            return logits
+
+        if self._waiting_boundary:
+            if self._peek_pending:
+                return self._peek_close(logits, mx)
             return logits
 
         # Resuming a dropped decode step repeats the same sampling position.
@@ -541,10 +633,13 @@ class ThinkingBudgetProcessor:
                 if (
                     self._grace
                     and self._thinking_tokens > 1
-                    and not self._last_token_boundary
+                    and self._last_token_boundary != _BOUNDARY_HARD
                 ):
                     self._waiting_boundary = True
                     self._grace_used = 0
+                    if self._last_token_boundary == _BOUNDARY_SOFT:
+                        self._peek_pending = True
+                        return self._peek_close(logits, mx)
                     return logits
                 if self._last_token_utf8_complete:
                     self._forcing = True
@@ -561,6 +656,11 @@ class ThinkingBudgetProcessor:
         if self._grace and self._in_thinking and not (self._done or self._forcing):
             # Track whether the latest thinking token ends a sentence/line.
             self._last_token_boundary = self._is_boundary(token_id)
+            if (
+                self._last_token_boundary == _BOUNDARY_SOFT
+                and self._whitespace_mask is None
+            ):
+                self._last_token_boundary = _BOUNDARY_HARD
         self._last_token_utf8_complete = self._is_utf8_complete(token_id)
 
         if self._done:
@@ -579,6 +679,20 @@ class ThinkingBudgetProcessor:
                 self._forcing = False
                 self._done = True
             return
+
+        if self._peek_pending:
+            # Resolve the lazily selected close from the token that won.
+            self._peek_pending = False
+            if token_id == self._force_sequence[0]:
+                self._waiting_boundary = False
+                self._recent_tokens = []
+                if len(self._force_sequence) == 1:
+                    self._in_thinking = False
+                    self._done = True
+                else:
+                    self._forcing = True
+                    self._force_idx = 1
+                return
 
         # Detect natural close-think via sliding window
         if len(self._think_end_ids) == 1:
@@ -599,7 +713,13 @@ class ThinkingBudgetProcessor:
 
         if self._waiting_boundary:
             self._grace_used += 1
-            if self._last_token_boundary or self._grace_used >= self._grace:
+            boundary = self._last_token_boundary
+            if boundary == _BOUNDARY_SOFT and self._grace_used < self._grace:
+                if self._last_token_utf8_complete:
+                    self._peek_pending = True
+                    return
+                boundary = _BOUNDARY_HARD
+            if boundary or self._grace_used >= self._grace:
                 self._waiting_boundary = False
                 self._recent_tokens = []
                 if self._last_token_utf8_complete:
@@ -628,25 +748,57 @@ class ThinkingBudgetProcessor:
     def _reset_grace(self) -> None:
         self._waiting_boundary = False
         self._grace_used = 0
-        self._last_token_boundary = False
+        self._last_token_boundary = _BOUNDARY_NONE
         self._boundary_tail = b""
+        self._peek_pending = False
 
-    def _is_boundary(self, token_id: int) -> bool:
-        """True when the accepted token ends a line or a sentence.
+    def _peek_close(self, logits, mx):
+        """Close here when the next token is likely whitespace-led.
+
+        Stays lazy: the decision is an ``mx.where`` between the forced row
+        and the model's row, and ``_update_state`` reads the outcome from the
+        accepted token. Without a usable vocabulary mask the soft boundary
+        closes at once.
+        """
+        mask = None
+        if self._whitespace_mask is not None:
+            try:
+                mask = self._whitespace_mask(int(logits.shape[-1]))
+            except Exception:
+                mask = None
+        if mask is None:
+            self._peek_pending = False
+            self._waiting_boundary = False
+            self._forcing = True
+            self._force_idx = 0
+            self._recent_tokens = []
+            return self._force_next_token(logits, mx)
+        probs = mx.softmax(logits.astype(mx.float32), axis=-1)
+        p_ws = mx.sum(mx.where(mask, probs, 0.0), axis=-1, keepdims=True)
+        forced = mx.full(logits.shape, float("-inf"), dtype=logits.dtype)
+        forced[..., self._force_sequence[0]] = 0.0
+        return mx.where(
+            p_ws > THINKING_BUDGET_FINISH_SENTENCE_WHITESPACE_THRESHOLD,
+            forced,
+            logits,
+        )
+
+    def _is_boundary(self, token_id: int) -> int:
+        """Boundary kind of the accepted token (none / hard / soft).
 
         Byte pieces and GPT-2 byte-level BPE strings (e.g. ``'ĊĊ'`` for
         ``\\n\\n``) are decoded to text first; a multibyte character split
         across tokens is completed from the carried tail bytes.
         """
         if self._token_to_piece is None:
-            return False
+            return _BOUNDARY_NONE
         try:
             piece = self._token_to_piece(token_id)
         except Exception:
-            return False
+            return _BOUNDARY_NONE
         if piece is None:
             self._boundary_tail = b""
-            return False
+            return _BOUNDARY_NONE
         if isinstance(piece, str):
             try:
                 data = bytes(_GPT2_BYTE_DECODER[ch] for ch in piece)
@@ -668,9 +820,14 @@ class ThinkingBudgetProcessor:
                 text = piece
             else:
                 text = piece.decode("utf-8", errors="ignore")
-        return "\n" in text or text.rstrip(_SENTENCE_TRAILING_CHARS).endswith(
-            _SENTENCE_END_CHARS
-        )
+        if "\n" in text:
+            return _BOUNDARY_HARD
+        text = text.rstrip(_SENTENCE_TRAILING_CHARS)
+        if text.endswith(_HARD_SENTENCE_END_CHARS):
+            return _BOUNDARY_HARD
+        if text.endswith(_SOFT_SENTENCE_END_CHARS):
+            return _BOUNDARY_SOFT
+        return _BOUNDARY_NONE
 
     def _is_utf8_complete(self, token_id: int) -> bool:
         """Best-effort UTF-8 boundary check for accepted token bytes."""
@@ -731,6 +888,7 @@ class ThinkingBudgetProcessor:
         "_grace_used",
         "_last_token_boundary",
         "_boundary_tail",
+        "_peek_pending",
     )
 
     def snapshot_state(self) -> dict:

@@ -7858,9 +7858,12 @@ class Scheduler:
             else:
                 think_end_ids = self._resolve_think_end_token_ids()
             if think_end_ids:
+                from functools import partial
+
                 from .api.thinking import (
                     THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS,
                     ThinkingBudgetProcessor,
+                    leading_whitespace_mask,
                 )
 
                 think_start_id = self._get_think_token_id("think_start_id")
@@ -7891,6 +7894,9 @@ class Scheduler:
                 )
                 if parser_trailing_ids is not None:
                     trailing_ids = parser_trailing_ids
+                finish_sentence = bool(
+                    getattr(sampling_params, "thinking_budget_finish_sentence", False)
+                )
                 processor = ThinkingBudgetProcessor(
                     think_end_token_ids=think_end_ids,
                     budget=sampling_params.thinking_budget,
@@ -7901,10 +7907,13 @@ class Scheduler:
                     start_in_thinking=not optional_thinking,
                     grace_tokens=(
                         THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
-                        if getattr(
-                            sampling_params, "thinking_budget_finish_sentence", False
-                        )
+                        if finish_sentence
                         else 0
+                    ),
+                    whitespace_mask=(
+                        partial(leading_whitespace_mask, self.tokenizer)
+                        if finish_sentence and self.tokenizer is not None
+                        else None
                     ),
                 )
                 logits_processors.append(processor)

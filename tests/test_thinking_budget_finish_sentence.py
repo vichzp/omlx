@@ -417,10 +417,14 @@ class TestFinishSentenceSchedulerWiring:
         return budget
 
     def test_switch_on_uses_the_ceiling(self):
-        assert self._build(True)._grace == THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
+        budget = self._build(True)
+        assert budget._grace == THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
+        assert budget._whitespace_mask is not None
 
     def test_switch_off_closes_immediately(self):
-        assert self._build(False)._grace == 0
+        budget = self._build(False)
+        assert budget._grace == 0
+        assert budget._whitespace_mask is None
 
 
 class TestFinishSentenceEnginePlumbing:
@@ -430,3 +434,234 @@ class TestFinishSentenceEnginePlumbing:
             Path(__file__).resolve().parents[1] / "omlx" / "engine" / engine
         ).read_text()
         assert source.count("thinking_budget_finish_sentence=bool(") == 2
+
+
+# ---------------------------------------------------------------------------
+# Western sentence ends: close only when the next token is whitespace-led
+# ---------------------------------------------------------------------------
+
+WS_ID = 20  # whitespace-led token (" next")
+DIGIT_ID = 30  # "5" in "3.5"
+LEAD_ID = 99  # leading "\n" of a wrapped close sequence
+TRAIL_ID = 98
+
+
+def _ws_mask(vocab_size):
+    flags = [False] * vocab_size
+    flags[WS_ID] = True
+    return mx.array(flags)
+
+
+def _peaked(token_id, vocab=100):
+    logits = mx.zeros((1, vocab))
+    logits[0, token_id] = 10.0
+    return logits
+
+
+def _forced_in(logits):
+    """Forced token id when the row is fully masked but one id, else None."""
+    finite = mx.isfinite(logits).sum().item()
+    return mx.argmax(logits).item() if finite == 1 else None
+
+
+def _peek_processor(
+    budget=3,
+    grace=5,
+    whitespace_mask=_ws_mask,
+    leading=None,
+    trailing=None,
+):
+    return ThinkingBudgetProcessor(
+        think_end_token_ids=[THINK_END],
+        budget=budget,
+        think_start_token_id=THINK_START,
+        leading_token_ids=leading,
+        trailing_token_ids=trailing,
+        token_to_piece=_piece,
+        grace_tokens=grace,
+        whitespace_mask=whitespace_mask,
+    )
+
+
+def _feed(proc, generated, logits_fn=lambda: _peaked(WS_ID)):
+    """Call the processor at every position; return the last output."""
+    out = None
+    for i in range(len(generated) + 1):
+        out = proc(mx.array(PROMPT + generated[:i]), logits_fn())
+    return out
+
+
+@pytest.mark.skipif(not HAS_MLX, reason="mlx not available")
+class TestFinishSentenceWhitespacePeek:
+    def test_whitespace_likely_closes_at_the_period(self):
+        proc = _peek_processor()
+        out = _feed(proc, [10, 11, 12, 60])
+        assert proc._peek_pending
+        assert _forced_in(out) == THINK_END
+        # The lazily forced token is accepted: the close completes.
+        proc(mx.array(PROMPT + [10, 11, 12, 60, THINK_END]), _peaked(WS_ID))
+        assert proc._done and not proc._in_thinking
+        assert not proc._peek_pending
+
+    def test_digit_after_period_keeps_grace_open(self):
+        proc = _peek_processor()
+        out = _feed(proc, [10, 11, 12, 60], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) is None
+        assert mx.array_equal(out, _peaked(DIGIT_ID))
+        used = proc._grace_used
+        out = proc(mx.array(PROMPT + [10, 11, 12, 60, DIGIT_ID]), _peaked(DIGIT_ID))
+        assert _forced_in(out) is None
+        assert proc._waiting_boundary and not proc._peek_pending
+        assert proc._grace_used == used + 1
+
+    def test_digit_then_cap_still_closes(self):
+        proc = _peek_processor(grace=3)
+        out = _feed(
+            proc, [10, 11, 12, 60, DIGIT_ID], logits_fn=lambda: _peaked(DIGIT_ID)
+        )
+        assert _forced_in(out) == THINK_END
+        assert proc._forcing
+
+    @pytest.mark.parametrize("boundary", [61, 64, 81, 82])
+    def test_newline_and_cjk_stay_immediate(self, boundary):
+        proc = _peek_processor()
+        out = _feed(proc, [10, 11, 12, boundary], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) == THINK_END
+        assert proc._forcing and not proc._peek_pending
+
+    def test_lazily_forced_leading_token_continues_the_sequence(self):
+        proc = _peek_processor(leading=[LEAD_ID], trailing=[TRAIL_ID])
+        out = _feed(proc, [10, 11, 12, 60])
+        assert _forced_in(out) == LEAD_ID
+        hist = [10, 11, 12, 60, LEAD_ID]
+        out = proc(mx.array(PROMPT + hist), _peaked(WS_ID))
+        assert proc._forcing and proc._force_idx == 1
+        assert _forced_in(out) == THINK_END
+        out = proc(mx.array(PROMPT + hist + [THINK_END]), _peaked(WS_ID))
+        assert _forced_in(out) == TRAIL_ID
+        proc(mx.array(PROMPT + hist + [THINK_END, TRAIL_ID]), _peaked(WS_ID))
+        assert proc._done
+
+    def test_close_tag_first_still_forces_trailing(self):
+        proc = _peek_processor(trailing=[TRAIL_ID])
+        out = _feed(proc, [10, 11, 12, 60])
+        assert _forced_in(out) == THINK_END
+        out = proc(mx.array(PROMPT + [10, 11, 12, 60, THINK_END]), _peaked(WS_ID))
+        assert _forced_in(out) == TRAIL_ID
+
+    def test_budget_landing_on_period_peeks(self):
+        proc = _peek_processor()
+        out = _feed(proc, [10, 60])
+        assert proc._waiting_boundary and proc._peek_pending
+        assert _forced_in(out) == THINK_END
+        proc2 = _peek_processor()
+        out = _feed(proc2, [10, 60], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) is None and proc2._waiting_boundary
+
+    def test_mask_size_mismatch_closes_immediately(self):
+        proc = _peek_processor(whitespace_mask=lambda vocab: None)
+        out = _feed(proc, [10, 11, 12, 60], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) == THINK_END
+        assert proc._forcing and not proc._peek_pending
+
+    def test_raising_mask_lookup_closes_immediately(self):
+        def broken(vocab):
+            raise RuntimeError("no vocab")
+
+        proc = _peek_processor(whitespace_mask=broken)
+        out = _feed(proc, [10, 11, 12, 60], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) == THINK_END
+
+    def test_without_mask_provider_period_is_immediate(self):
+        proc = _peek_processor(whitespace_mask=None)
+        out = _feed(proc, [10, 11, 12, 60], logits_fn=lambda: _peaked(DIGIT_ID))
+        assert _forced_in(out) == THINK_END
+        assert proc._forcing
+
+    def test_pending_survives_snapshot_restore(self):
+        proc = _peek_processor()
+        _feed(proc, [10, 11, 12, 60])
+        snap = proc.snapshot_state()
+        assert snap["_peek_pending"] is True
+        proc(mx.array(PROMPT + [10, 11, 12, 60, DIGIT_ID]), _peaked(WS_ID))
+        assert not proc._peek_pending
+        proc.restore_state(snap)
+        assert proc._peek_pending
+        proc(mx.array(PROMPT + [10, 11, 12, 60, THINK_END]), _peaked(WS_ID))
+        assert proc._done
+
+    def test_chain_verify_rejected_draft_matches_serial(self):
+        """Lightning MTP verify: rows see draft prefixes, the processor is
+        checkpointed per row and rewound to the last emitted row."""
+        committed = [10, 11, 12, 60]
+        serial = _peek_processor()
+        _feed(serial, committed)
+        serial(mx.array(PROMPT + committed + [THINK_END]), _peaked(WS_ID))
+
+        proc = _peek_processor()
+        _feed(proc, committed[:-1])
+        drafts = [13, 14]  # drafted past the period, never a close
+        prev_rows = [PROMPT + committed]
+        for d in drafts:
+            prev_rows.append(prev_rows[-1] + [d])
+        targets, row_snaps = [], []
+        for prev in prev_rows:
+            out = proc(mx.array(prev), _peaked(WS_ID))
+            targets.append(mx.argmax(out).item())
+            row_snaps.append(proc.snapshot_state())
+        # Row 0 is forced lazily; draft 13 is rejected there (m = 0).
+        assert targets[0] == THINK_END
+        m = next(i for i, d in enumerate(drafts) if targets[i] != d)
+        assert m == 0
+        proc.restore_state(row_snaps[m])
+        assert proc._peek_pending and proc._waiting_boundary
+        # Next cycle commits the emitted correction token.
+        proc(mx.array(PROMPT + committed + [targets[m]]), _peaked(WS_ID))
+        for name in ("_done", "_in_thinking", "_grace_used", "_peek_pending"):
+            assert getattr(proc, name) == getattr(serial, name), name
+
+
+class _FakeVocab:
+    def __init__(self, pieces):
+        self._pieces = pieces
+
+    def __len__(self):
+        return len(self._pieces)
+
+    def convert_ids_to_tokens(self, ids):
+        return [self._pieces[i] for i in ids]
+
+
+@pytest.mark.skipif(not HAS_MLX, reason="mlx not available")
+class TestLeadingWhitespaceMask:
+    PIECES = [
+        "Ġthe",  # GPT-2 " the"
+        "Ċ",  # GPT-2 "\n"
+        "3",
+        "▁word",  # SentencePiece " word"
+        "<0x0A>",  # byte fallback "\n"
+        "​",  # zero-width space
+        "a",
+        " x",
+        "<|im_end|>",
+        b" raw",
+    ]
+    EXPECTED = [True, True, False, True, True, False, False, True, False, True]
+
+    def test_flags_and_padding(self):
+        from omlx.api.thinking import leading_whitespace_mask
+
+        tok = _FakeVocab(self.PIECES)
+        mask = leading_whitespace_mask(tok, 12)
+        assert mask.tolist() == self.EXPECTED + [False, False]
+        assert leading_whitespace_mask(tok, 12) is mask  # cached
+
+    def test_narrower_logits_return_none(self):
+        from omlx.api.thinking import leading_whitespace_mask
+
+        assert leading_whitespace_mask(_FakeVocab(self.PIECES), 5) is None
+
+    def test_unreadable_vocab_returns_none(self):
+        from omlx.api.thinking import leading_whitespace_mask
+
+        assert leading_whitespace_mask(object(), 16) is None

@@ -286,6 +286,7 @@ def _install_thinking_budget_support(mlx_server: Any, tokenizer: Any):
     from omlx.api.thinking import (
         THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS,
         ThinkingBudgetProcessor,
+        leading_whitespace_mask,
         prompt_opens_thinking,
     )
 
@@ -330,6 +331,7 @@ def _install_thinking_budget_support(mlx_server: Any, tokenizer: Any):
             and getattr(args, "_omlx_thinking_active", False)
         ):
             processors = list(processors)
+            finish_sentence = kwargs.get("thinking_budget_finish_sentence") is True
             processors.append(
                 ThinkingBudgetProcessor(
                     think_end_token_ids=think_end_ids,
@@ -340,8 +342,13 @@ def _install_thinking_budget_support(mlx_server: Any, tokenizer: Any):
                     token_to_piece=token_to_piece,
                     grace_tokens=(
                         THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
-                        if kwargs.get("thinking_budget_finish_sentence") is True
+                        if finish_sentence
                         else 0
+                    ),
+                    whitespace_mask=(
+                        partial(leading_whitespace_mask, tokenizer)
+                        if finish_sentence
+                        else None
                     ),
                 )
             )

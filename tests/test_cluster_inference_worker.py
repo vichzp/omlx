@@ -1657,8 +1657,8 @@ def test_install_thinking_budget_support_honors_finish_sentence():
             )
             (processor,) = server._make_logits_processors(args)
             assert isinstance(processor, ThinkingBudgetProcessor)
-            graces.append(processor._grace)
-    assert graces == [THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS, 0]
+            graces.append((processor._grace, processor._whitespace_mask is None))
+    assert graces == [(THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS, False), (0, True)]
 
 
 def test_install_thinking_budget_support_does_not_need_the_http_stack():
