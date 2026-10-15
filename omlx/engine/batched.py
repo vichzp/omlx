@@ -1172,6 +1172,9 @@ class BatchedEngine(BaseEngine):
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
             thinking_budget=kwargs.get("thinking_budget", None),
+            thinking_budget_finish_sentence=bool(
+                kwargs.get("thinking_budget_finish_sentence", False)
+            ),
             compiled_grammar=kwargs.get("compiled_grammar", None),
             seed=kwargs.get("seed", None),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),
@@ -1257,6 +1260,9 @@ class BatchedEngine(BaseEngine):
             frequency_penalty=kwargs.get("frequency_penalty", 0.0),
             stop=stop or [],
             thinking_budget=kwargs.get("thinking_budget", None),
+            thinking_budget_finish_sentence=bool(
+                kwargs.get("thinking_budget_finish_sentence", False)
+            ),
             compiled_grammar=kwargs.get("compiled_grammar", None),
             seed=kwargs.get("seed", None),
             stop_skips_reasoning=kwargs.get("stop_skips_reasoning", False),

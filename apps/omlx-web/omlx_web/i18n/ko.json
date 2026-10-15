@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "Thinking 토큰 제한",
   "modal.model_settings.thinking_budget_hint": "추론 모델의 thinking 토큰 수를 제한합니다. 초과 시 thinking을 강제 종료합니다.",
   "modal.model_settings.thinking_budget_placeholder": "예: 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "문장 마무리",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "예산이 소진되면 thinking을 종료하기 전에 현재 문장이나 줄을 마무리하게 합니다(최대 40 토큰 추가).",
   "modal.model_settings.guided_grammar": "Guided Grammar",
   "modal.model_settings.guided_grammar_hint": "이 모델에 기본으로 EBNF 문법을 적용합니다.",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

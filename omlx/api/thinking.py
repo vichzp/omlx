@@ -9,6 +9,7 @@ Used by reasoning models like DeepSeek R1, Qwen3/3.5, MiniMax that wrap
 their chain-of-thought reasoning in <think>...</think> tags.
 """
 
+import codecs
 import re
 from collections.abc import Callable, Sequence
 from typing import List, Optional, Tuple
@@ -28,6 +29,37 @@ _THINKING_PATTERN = re.compile(r'<think>(.*?)</think>', re.DOTALL)
 # Handle case where <think> is missing but </think> is present
 # (scheduler prepends <think>\n but the tag may be split)
 _THINKING_TAIL_PATTERN = re.compile(r'^(.*?)</think>', re.DOTALL)
+
+
+def _gpt2_byte_decoder() -> dict[str, int]:
+    """Inverse of GPT-2's ``bytes_to_unicode`` table (byte-level BPE)."""
+    printable = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("\u00a1"), ord("\u00ac") + 1))
+        + list(range(ord("\u00ae"), ord("\u00ff") + 1))
+    )
+    codepoints = list(printable)
+    extra = 0
+    for byte in range(256):
+        if byte not in printable:
+            printable.append(byte)
+            codepoints.append(256 + extra)
+            extra += 1
+    return {chr(cp): byte for byte, cp in zip(printable, codepoints)}
+
+
+_GPT2_BYTE_DECODER = _gpt2_byte_decoder()
+
+# Ceiling for the ``thinking_budget_finish_sentence`` switch: once the budget
+# is exhausted mid-sentence, the model may sample at most this many extra
+# tokens looking for a sentence or line end before the close is forced.
+THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS = 40
+
+# Reasoning boundary for the thinking-budget grace window: a piece that ends
+# a sentence once trailing whitespace, closing quotes/brackets and markdown
+# emphasis are stripped (a newline anywhere in the piece also counts).
+_SENTENCE_END_CHARS = (".", "!", "?", "\u3002", "\uff01", "\uff1f")
+_SENTENCE_TRAILING_CHARS = " \t\"'*)]}\u201d\u2019\u300d\u300f\uff09"
 
 
 def _safe_tokenizer_attr(tokenizer, attr: str, default=None):
@@ -426,6 +458,11 @@ class ThinkingBudgetProcessor:
         think_start_token_id: Token ID for the open-think tag (re-entry detection).
         start_in_thinking: False when the model, not the prompt, opens
             thinking. Counting then starts at ``think_start_token_id``.
+        grace_tokens: Optional boundary grace window. When the budget is
+            reached mid-sentence, keep sampling normally until an accepted
+            token ends a line or a sentence, then force the close sequence;
+            force it anyway after this many extra tokens. ``None``/``0``
+            closes immediately at the budget.
     """
 
     def __init__(
@@ -437,6 +474,7 @@ class ThinkingBudgetProcessor:
         trailing_token_ids: Optional[List[int]] = None,
         token_to_piece: Optional[Callable[[int], str | bytes | None]] = None,
         start_in_thinking: bool = True,
+        grace_tokens: int | None = None,
     ):
         self._think_end_ids = think_end_token_ids
         # Full force sequence: \n + </think> + \n\n (matches training pattern)
@@ -446,6 +484,7 @@ class ThinkingBudgetProcessor:
             + (trailing_token_ids or [])
         )
         self._budget = budget
+        self._grace = max(0, int(grace_tokens or 0))
         self._think_start_id = think_start_token_id
         self._token_to_piece = token_to_piece
 
@@ -461,6 +500,11 @@ class ThinkingBudgetProcessor:
         self._recent_tokens: List[int] = []
         self._last_token_utf8_complete: bool = True
         self._pending_utf8: bytes = b""
+        # Boundary grace window (only touched when ``self._grace > 0``)
+        self._waiting_boundary: bool = False
+        self._grace_used: int = 0
+        self._last_token_boundary: bool = False
+        self._boundary_tail: bytes = b""
 
     def __call__(self, tokens, logits):
         """mlx-lm logits processor: (tokens, logits) -> logits."""
@@ -484,13 +528,24 @@ class ThinkingBudgetProcessor:
         if self._forcing:
             return self._force_next_token(logits, mx)
 
-        if self._waiting_utf8:
+        if self._waiting_utf8 or self._waiting_boundary:
             return logits
 
         # Resuming a dropped decode step repeats the same sampling position.
         if self._in_thinking and is_new_position:
             self._thinking_tokens += 1
             if self._thinking_tokens >= self._budget:
+                # Grace: let the model finish its sentence or line first.
+                # Skipped when no thinking token was accepted yet (nothing
+                # to finish) or when the last one already ends a boundary.
+                if (
+                    self._grace
+                    and self._thinking_tokens > 1
+                    and not self._last_token_boundary
+                ):
+                    self._waiting_boundary = True
+                    self._grace_used = 0
+                    return logits
                 if self._last_token_utf8_complete:
                     self._forcing = True
                     self._force_idx = 0
@@ -503,6 +558,9 @@ class ThinkingBudgetProcessor:
 
     def _update_state(self, token_id: int) -> None:
         """Update thinking state based on the last generated token."""
+        if self._grace and self._in_thinking and not (self._done or self._forcing):
+            # Track whether the latest thinking token ends a sentence/line.
+            self._last_token_boundary = self._is_boundary(token_id)
         self._last_token_utf8_complete = self._is_utf8_complete(token_id)
 
         if self._done:
@@ -511,6 +569,7 @@ class ThinkingBudgetProcessor:
                 self._done = False
                 self._thinking_tokens = 0
                 self._recent_tokens = []
+                self._reset_grace()
             return
 
         if self._forcing:
@@ -526,6 +585,7 @@ class ThinkingBudgetProcessor:
             if token_id == self._think_end_ids[0]:
                 self._in_thinking = False
                 self._done = True
+                self._reset_grace()
                 return
         else:
             self._recent_tokens.append(token_id)
@@ -534,7 +594,20 @@ class ThinkingBudgetProcessor:
             if self._recent_tokens == self._think_end_ids:
                 self._in_thinking = False
                 self._done = True
+                self._reset_grace()
                 return
+
+        if self._waiting_boundary:
+            self._grace_used += 1
+            if self._last_token_boundary or self._grace_used >= self._grace:
+                self._waiting_boundary = False
+                self._recent_tokens = []
+                if self._last_token_utf8_complete:
+                    self._forcing = True
+                    self._force_idx = 0
+                else:
+                    self._waiting_utf8 = True
+            return
 
         if self._waiting_utf8:
             if self._last_token_utf8_complete:
@@ -550,6 +623,54 @@ class ThinkingBudgetProcessor:
             self._done = False
             self._thinking_tokens = 0
             self._recent_tokens = []
+            self._reset_grace()
+
+    def _reset_grace(self) -> None:
+        self._waiting_boundary = False
+        self._grace_used = 0
+        self._last_token_boundary = False
+        self._boundary_tail = b""
+
+    def _is_boundary(self, token_id: int) -> bool:
+        """True when the accepted token ends a line or a sentence.
+
+        Byte pieces and GPT-2 byte-level BPE strings (e.g. ``'ĊĊ'`` for
+        ``\\n\\n``) are decoded to text first; a multibyte character split
+        across tokens is completed from the carried tail bytes.
+        """
+        if self._token_to_piece is None:
+            return False
+        try:
+            piece = self._token_to_piece(token_id)
+        except Exception:
+            return False
+        if piece is None:
+            self._boundary_tail = b""
+            return False
+        if isinstance(piece, str):
+            try:
+                data = bytes(_GPT2_BYTE_DECODER[ch] for ch in piece)
+            except KeyError:
+                data = None
+        else:
+            data = piece
+        text = None
+        if data is not None:
+            decoder = codecs.getincrementaldecoder("utf-8")("strict")
+            try:
+                text = decoder.decode(self._boundary_tail + data, final=False)
+                self._boundary_tail = decoder.getstate()[0]
+            except UnicodeDecodeError:
+                text = None
+        if text is None:
+            self._boundary_tail = b""
+            if isinstance(piece, str):
+                text = piece
+            else:
+                text = piece.decode("utf-8", errors="ignore")
+        return "\n" in text or text.rstrip(_SENTENCE_TRAILING_CHARS).endswith(
+            _SENTENCE_END_CHARS
+        )
 
     def _is_utf8_complete(self, token_id: int) -> bool:
         """Best-effort UTF-8 boundary check for accepted token bytes."""
@@ -606,6 +727,10 @@ class ThinkingBudgetProcessor:
         "_last_token_utf8_complete",
         "_pending_utf8",
         "_accepted_up_to",
+        "_waiting_boundary",
+        "_grace_used",
+        "_last_token_boundary",
+        "_boundary_tail",
     )
 
     def snapshot_state(self) -> dict:

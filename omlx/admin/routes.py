@@ -371,6 +371,7 @@ class ModelSettingsRequest(BaseModel):
     deepseek_v41_ced_prefill_enabled: bool | None = None
     thinking_budget_enabled: bool | None = None
     thinking_budget_tokens: int | None = None
+    thinking_budget_finish_sentence: bool | None = None
     # MTP draft tokens per cycle for legacy MTP (None = adaptive default).
     mtp_adaptive_max_depth: int | None = None
     # Fixed Lightning MTP draft depth (None = adaptive).
@@ -996,6 +997,7 @@ def _sanitize_diffusion_settings_dict(settings: dict) -> None:
 
     settings["force_sampling"] = False
     settings["thinking_budget_enabled"] = False
+    settings["thinking_budget_finish_sentence"] = False
     settings["guided_grammar_enabled"] = False
     settings["turboquant_kv_enabled"] = False
     settings["turboquant_kv_bits"] = 4
@@ -1044,6 +1046,7 @@ def _sanitize_diffusion_model_settings(settings) -> None:
     settings.preserve_thinking = None
     settings.thinking_budget_enabled = False
     settings.thinking_budget_tokens = None
+    settings.thinking_budget_finish_sentence = False
     settings.reasoning_parser = None
     settings.guided_grammar_enabled = False
     settings.guided_grammar = None
@@ -2862,6 +2865,10 @@ async def update_model_settings(
             request.thinking_budget_tokens
             if request.thinking_budget_tokens and request.thinking_budget_tokens > 0
             else None
+        )
+    if "thinking_budget_finish_sentence" in sent:
+        current_settings.thinking_budget_finish_sentence = (
+            request.thinking_budget_finish_sentence or False
         )
     for name in ("mtp_adaptive_max_depth", "mtp_fixed_depth"):
         if name not in sent:

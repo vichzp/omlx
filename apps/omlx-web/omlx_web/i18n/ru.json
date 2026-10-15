@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "Бюджет мышления",
   "modal.model_settings.thinking_budget_hint": "Ограничьте число токенов мышления для моделей рассуждения. Принудительно завершает мышление при превышении лимита.",
   "modal.model_settings.thinking_budget_placeholder": "например, 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "Завершать предложение",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "Когда бюджет исчерпан, модель дописывает текущее предложение или строку (не более 40 токенов) перед завершением мышления.",
   "modal.model_settings.guided_grammar": "Управляемая грамматика",
   "modal.model_settings.guided_grammar_hint": "Применять EBNF-грамматику для этой модели по умолчанию.",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

@@ -283,7 +283,11 @@ def _install_thinking_budget_support(mlx_server: Any, tokenizer: Any):
     an ``omlx`` ``ThinkingBudgetProcessor`` appended, enforcing the budget in
     the rank's decode loop exactly like single-machine inference does.
     """
-    from omlx.api.thinking import ThinkingBudgetProcessor, prompt_opens_thinking
+    from omlx.api.thinking import (
+        THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS,
+        ThinkingBudgetProcessor,
+        prompt_opens_thinking,
+    )
 
     think_end_ids, think_start_id = _think_token_ids(tokenizer)
     if not think_end_ids:
@@ -334,6 +338,11 @@ def _install_thinking_budget_support(mlx_server: Any, tokenizer: Any):
                     leading_token_ids=leading_ids,
                     trailing_token_ids=trailing_ids,
                     token_to_piece=token_to_piece,
+                    grace_tokens=(
+                        THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
+                        if kwargs.get("thinking_budget_finish_sentence") is True
+                        else 0
+                    ),
                 )
             )
         return processors

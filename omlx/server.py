@@ -2003,6 +2003,23 @@ def _resolve_thinking_budget(request, model_id: str | None) -> int | None:
     return None
 
 
+def _resolve_thinking_budget_finish_sentence(request, model_id: str | None) -> bool:
+    """Resolve the finish-sentence switch: request param > model settings > False."""
+    req_value = getattr(request, "thinking_budget_finish_sentence", None)
+    if isinstance(req_value, bool):
+        return req_value
+    ms = get_model_settings_for_request(model_id)
+    return bool(ms and ms.thinking_budget_finish_sentence)
+
+
+def _forward_thinking_budget_finish_sentence(kwargs: dict, request) -> None:
+    """Add the finish-sentence switch to engine kwargs when a budget applies."""
+    if kwargs.get("thinking_budget") is not None and (
+        _resolve_thinking_budget_finish_sentence(request, request.model)
+    ):
+        kwargs["thinking_budget_finish_sentence"] = True
+
+
 def _no_repeat_ngram_kwargs(request) -> dict[str, int]:
     size = getattr(request, "no_repeat_ngram_size", None)
     if not size:
@@ -4442,6 +4459,7 @@ async def create_completion(
             thinking_budget = _resolve_thinking_budget(request, request.model)
             if thinking_budget is not None:
                 gen_kwargs["thinking_budget"] = thinking_budget
+            _forward_thinking_budget_finish_sentence(gen_kwargs, request)
             if inference_request_id is not None:
                 gen_kwargs["_request_id"] = inference_request_id
             # Widen the repetition-penalty look-back window when the client
@@ -4958,6 +4976,8 @@ async def create_chat_completion(
                     "Auto-set thinking_budget=%d for grammar-constrained request",
                     default_budget,
                 )
+        _forward_thinking_budget_finish_sentence(chat_kwargs, request)
+
         if native_response_format is not None:
             chat_kwargs["response_format"] = native_response_format
 
@@ -5761,6 +5781,7 @@ async def stream_completion(
     thinking_budget = _resolve_thinking_budget(request, request.model)
     if thinking_budget is not None:
         gen_kwargs["thinking_budget"] = thinking_budget
+    _forward_thinking_budget_finish_sentence(gen_kwargs, request)
     if inference_request_id is not None:
         gen_kwargs["_request_id"] = inference_request_id
     progress_request_id = None
@@ -7507,6 +7528,7 @@ async def create_anthropic_message(
         thinking_budget = _resolve_thinking_budget(request, request.model)
         if thinking_budget is not None:
             chat_kwargs["thinking_budget"] = thinking_budget
+        _forward_thinking_budget_finish_sentence(chat_kwargs, request)
 
         # Auto-set enable_thinking in chat template kwargs when a positive thinking
         # budget is active but enable_thinking was not already set (e.g. via
@@ -8347,6 +8369,7 @@ async def create_response(
                     "Auto-set thinking_budget=%d for grammar-constrained request",
                     default_budget,
                 )
+        _forward_thinking_budget_finish_sentence(chat_kwargs, request)
 
         if tools_for_template:
             chat_kwargs["tools"] = tools_for_template

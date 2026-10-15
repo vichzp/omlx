@@ -183,6 +183,27 @@ async def test_sampling_setting_change_keeps_cached_failure():
 
 
 @pytest.mark.asyncio
+async def test_thinking_budget_finish_sentence_is_persisted():
+    pool, _ = _failed_pool()
+    settings = ModelSettings(thinking_budget_enabled=True, thinking_budget_tokens=512)
+
+    await _update_settings(
+        pool,
+        settings,
+        admin_routes.ModelSettingsRequest(thinking_budget_finish_sentence=True),
+    )
+    assert settings.thinking_budget_finish_sentence is True
+    assert settings.thinking_budget_tokens == 512
+
+    await _update_settings(
+        pool,
+        settings,
+        admin_routes.ModelSettingsRequest(thinking_budget_finish_sentence=False),
+    )
+    assert settings.thinking_budget_finish_sentence is False
+
+
+@pytest.mark.asyncio
 async def test_qwen_ane_prefill_settings_are_persisted():
     pool, entry = _failed_pool()
     entry.config_model_type = "qwen3_5"

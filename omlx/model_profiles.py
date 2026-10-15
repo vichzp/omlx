@@ -33,6 +33,7 @@ UNIVERSAL_PROFILE_FIELDS = (
     "cache_reasoning_output",
     "thinking_budget_enabled",
     "thinking_budget_tokens",
+    "thinking_budget_finish_sentence",
     "reasoning_parser",
     "guided_grammar_enabled",
     "guided_grammar",

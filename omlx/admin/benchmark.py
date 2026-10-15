@@ -341,6 +341,7 @@ _UPLOADED_SETTING_FIELDS = (
     "enable_thinking",
     "thinking_budget_enabled",
     "thinking_budget_tokens",
+    "thinking_budget_finish_sentence",
     "reasoning_parser",
     "guided_grammar_enabled",
     "model_type_override",

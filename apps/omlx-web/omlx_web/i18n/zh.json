@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "思考预算",
   "modal.model_settings.thinking_budget_hint": "限制推理模型的思考 Token 数。超出时强制结束思考。",
   "modal.model_settings.thinking_budget_placeholder": "例如 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "完成当前句子",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "预算用尽时，先让模型写完当前句子或行（最多再生成 40 个 Token），再结束思考。",
   "modal.model_settings.guided_grammar": "引导语法",
   "modal.model_settings.guided_grammar_hint": "为此模型默认应用 EBNF 语法。",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

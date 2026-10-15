@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "Rozpočet přemýšlení",
   "modal.model_settings.thinking_budget_hint": "Omezit tokeny přemýšlení u modelů s usuzováním. Při překročení vynutí konec přemýšlení.",
   "modal.model_settings.thinking_budget_placeholder": "např. 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "Dokončit větu",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "Po vyčerpání rozpočtu nechá model dokončit aktuální větu nebo řádek (nejvýše 40 dalších tokenů), než ukončí přemýšlení.",
   "modal.model_settings.guided_grammar": "Řízená gramatika",
   "modal.model_settings.guided_grammar_hint": "Pro tento model použít gramatiku EBNF.",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

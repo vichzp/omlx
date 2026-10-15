@@ -674,6 +674,8 @@ raise SystemExit(2)
         # sees it and can build its budget processor per request.
         if kwargs.get("thinking_budget") is not None:
             chat_template_kwargs["thinking_budget"] = kwargs["thinking_budget"]
+            if kwargs.get("thinking_budget_finish_sentence"):
+                chat_template_kwargs["thinking_budget_finish_sentence"] = True
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
         if stream:
@@ -746,6 +748,8 @@ raise SystemExit(2)
         # sees it and can build its budget processor per request.
         if kwargs.get("thinking_budget") is not None:
             chat_template_kwargs["thinking_budget"] = kwargs["thinking_budget"]
+            if kwargs.get("thinking_budget_finish_sentence"):
+                chat_template_kwargs["thinking_budget_finish_sentence"] = True
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
         if stream:

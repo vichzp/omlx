@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "思考トークン制限",
   "modal.model_settings.thinking_budget_hint": "推論モデルの思考トークン数を制限します。超過時に思考を強制終了します。",
   "modal.model_settings.thinking_budget_placeholder": "例: 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "文を書き終えてから終了",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "予算を使い切ったとき、思考を終了する前に現在の文または行を書き終えさせます（最大 40 トークン追加）。",
   "modal.model_settings.guided_grammar": "Guided Grammar",
   "modal.model_settings.guided_grammar_hint": "このモデルにデフォルトで EBNF 文法を適用します。",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

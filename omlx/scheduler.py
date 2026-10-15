@@ -7858,7 +7858,10 @@ class Scheduler:
             else:
                 think_end_ids = self._resolve_think_end_token_ids()
             if think_end_ids:
-                from .api.thinking import ThinkingBudgetProcessor
+                from .api.thinking import (
+                    THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS,
+                    ThinkingBudgetProcessor,
+                )
 
                 think_start_id = self._get_think_token_id("think_start_id")
                 # An optional reasoning phase is opened by the model with the
@@ -7896,6 +7899,13 @@ class Scheduler:
                     trailing_token_ids=trailing_ids,
                     token_to_piece=self._thinking_budget_token_to_piece,
                     start_in_thinking=not optional_thinking,
+                    grace_tokens=(
+                        THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS
+                        if getattr(
+                            sampling_params, "thinking_budget_finish_sentence", False
+                        )
+                        else 0
+                    ),
                 )
                 logits_processors.append(processor)
 

@@ -1275,6 +1275,8 @@
   "modal.model_settings.thinking_budget": "Budget de réflexion",
   "modal.model_settings.thinking_budget_hint": "Limitez les tokens de réflexion pour les modèles de raisonnement. Force la fin de la réflexion lorsque dépassé.",
   "modal.model_settings.thinking_budget_placeholder": "par ex. 4096",
+  "modal.model_settings.thinking_budget_finish_sentence": "Terminer la phrase",
+  "modal.model_settings.thinking_budget_finish_sentence_hint": "Lorsque le budget est épuisé, laisse le modèle terminer sa phrase ou sa ligne en cours (40 tokens de plus au maximum) avant de clore la réflexion.",
   "modal.model_settings.guided_grammar": "Guided Grammar",
   "modal.model_settings.guided_grammar_hint": "Apply an EBNF grammar by default for this model.",
   "modal.model_settings.guided_grammar_placeholder": "root ::= \"YES\"",

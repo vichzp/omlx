@@ -376,6 +376,9 @@ class ChatCompletionRequest(BaseModel):
     reasoning_effort: Optional[Union[str, int, float]] = None
     # Thinking budget (max thinking tokens, None = unlimited)
     thinking_budget: Optional[int] = Field(default=None, ge=0)
+    # Let the model finish its sentence or line when the budget runs out
+    # (None = use model setting)
+    thinking_budget_finish_sentence: Optional[bool] = None
     # SpecPrefill: per-request enable/disable (None = use model setting)
     specprefill: Optional[bool] = None
     # SpecPrefill: per-request keep percentage (0.1-0.5, None = use model setting)
@@ -512,6 +515,9 @@ class CompletionRequest(BaseModel):
     seed: Optional[int] = None
     # Cap reasoning/thinking tokens (parity with /v1/chat/completions)
     thinking_budget: Optional[int] = Field(default=None, ge=0)
+    # Let the model finish its sentence or line when the budget runs out
+    # (None = use model setting)
+    thinking_budget_finish_sentence: Optional[bool] = None
 
     @field_validator("stop", mode="before")
     @classmethod

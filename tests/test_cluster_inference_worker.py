@@ -1626,6 +1626,41 @@ def test_install_thinking_budget_support_appends_processor_per_request():
     assert server.ResponseGenerator._tokenize is FakeResponseGenerator._tokenize
 
 
+def test_install_thinking_budget_support_honors_finish_sentence():
+    from omlx.api.thinking import (
+        THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS,
+        ThinkingBudgetProcessor,
+    )
+
+    class FakeResponseGenerator:
+        def _tokenize(self, tokenizer, request, args):
+            return [54], [[54]], ["assistant"], "reasoning"
+
+    class FakeServer:
+        ResponseGenerator = FakeResponseGenerator
+
+        @staticmethod
+        def _make_logits_processors(args):
+            return []
+
+    server = FakeServer()
+    with inference_worker._install_thinking_budget_support(server, _ThinkTokenizer()):
+        generator = server.ResponseGenerator()
+        graces = []
+        for kwargs in (
+            {"thinking_budget": 64, "thinking_budget_finish_sentence": True},
+            {"thinking_budget": 64},
+        ):
+            args = SimpleNamespace(chat_template_kwargs=kwargs)
+            generator._tokenize(
+                _ThinkTokenizer(), SimpleNamespace(request_type="chat"), args
+            )
+            (processor,) = server._make_logits_processors(args)
+            assert isinstance(processor, ThinkingBudgetProcessor)
+            graces.append(processor._grace)
+    assert graces == [THINKING_BUDGET_FINISH_SENTENCE_MAX_TOKENS, 0]
+
+
 def test_install_thinking_budget_support_does_not_need_the_http_stack():
     """CUDA worker venvs ship without FastAPI (#3519), so the rank's budget hook
     must not import it. Run in a fresh interpreter where the HTTP stack cannot be

@@ -348,6 +348,37 @@ def test_completion_payload_folds_thinking_budget_into_chat_template_kwargs():
     assert payload["chat_template_kwargs"] == {"thinking_budget": 512}
 
 
+def test_payloads_fold_finish_sentence_only_with_a_budget():
+    engine = DistributedBatchedEngine(_deployment())
+    common = dict(
+        max_tokens=64,
+        temperature=0.7,
+        top_p=0.9,
+        top_k=0,
+        min_p=0.0,
+        repetition_penalty=1.0,
+        presence_penalty=0.0,
+        stop=None,
+        stream=False,
+    )
+    chat = engine._chat_payload(
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        kwargs={"thinking_budget": 256, "thinking_budget_finish_sentence": True},
+        **common,
+    )
+    assert chat["chat_template_kwargs"] == {
+        "thinking_budget": 256,
+        "thinking_budget_finish_sentence": True,
+    }
+    completion = engine._completion_payload(
+        prompt="hi",
+        kwargs={"thinking_budget_finish_sentence": True},
+        **common,
+    )
+    assert "chat_template_kwargs" not in completion
+
+
 def test_payloads_forward_repetition_context_size_when_requested():
     engine = DistributedBatchedEngine(_deployment())
     kwargs = {"repetition_context_size": 128}

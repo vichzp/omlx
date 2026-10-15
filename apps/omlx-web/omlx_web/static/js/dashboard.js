@@ -22,6 +22,7 @@
         'preserve_thinking',
         'thinking_budget_enabled',
         'thinking_budget_tokens',
+        'thinking_budget_finish_sentence',
         'reasoning_parser',
         'guided_grammar_enabled',
         'guided_grammar',
@@ -1724,6 +1725,12 @@
                         }
                         continue;
                     }
+                    if (k === 'thinking_budget_finish_sentence') {
+                        if (ms.enableThinkingBudget && ms.thinking_budget_finish_sentence) {
+                            out.thinking_budget_finish_sentence = true;
+                        }
+                        continue;
+                    }
                     if (k === 'index_cache_freq') {
                         if (ms.enableIndexCache) out.index_cache_freq = ms.index_cache_freq || 4;
                         continue;
@@ -2171,6 +2178,7 @@
                         model?.deepseek_v41_engram_ssd_offload_forced === true,
                     enableThinkingBudget: !!(s.thinking_budget_tokens),
                     thinking_budget_tokens: s.thinking_budget_tokens || null,
+                    thinking_budget_finish_sentence: s.thinking_budget_finish_sentence === true,
                     guided_grammar_enabled: s.guided_grammar_enabled || false,
                     guided_grammar: s.guided_grammar || '',
                     enableToolResultLimit: !!(s.max_tool_result_tokens),
@@ -2294,6 +2302,7 @@
                 ms.enable_thinking = null;
                 ms.enableThinkingBudget = false;
                 ms.thinking_budget_tokens = null;
+                ms.thinking_budget_finish_sentence = false;
                 ms.enableToolResultLimit = false;
                 ms.max_tool_result_tokens = null;
                 ms.ctKwargEntries = [];
@@ -2314,6 +2323,8 @@
                     }
                     if (k === 'thinking_budget_enabled') {
                         ms.enableThinkingBudget = !!s[k];
+                    } else if (k === 'thinking_budget_finish_sentence') {
+                        ms.thinking_budget_finish_sentence = s[k] === true;
                     } else if (k === 'max_tool_result_tokens') {
                         ms.enableToolResultLimit = s[k] != null;
                         ms.max_tool_result_tokens = s[k] ?? null;
@@ -3206,6 +3217,8 @@
                                 thinking_budget_tokens: this.modelSettings.enableThinkingBudget
                                     ? (this.modelSettings.thinking_budget_tokens || null)
                                     : 0,
+                                thinking_budget_finish_sentence: !!(this.modelSettings.enableThinkingBudget
+                                    && this.modelSettings.thinking_budget_finish_sentence),
                                 guided_grammar_enabled: this.modelSettings.guided_grammar_enabled,
                                 guided_grammar: this.modelSettings.guided_grammar_enabled
                                     ? (this.modelSettings.guided_grammar || null)
@@ -3312,6 +3325,7 @@
                                     enable_thinking: null,
                                     thinking_budget_enabled: false,
                                     thinking_budget_tokens: 0,
+                                    thinking_budget_finish_sentence: false,
                                     guided_grammar_enabled: false,
                                     guided_grammar: null,
                                     max_tool_result_tokens: 0,
@@ -3579,6 +3593,7 @@
                         this.modelSettings.enable_thinking = false;
                         this.modelSettings.enableThinkingBudget = false;
                         this.modelSettings.thinking_budget_tokens = 0;
+                        this.modelSettings.thinking_budget_finish_sentence = false;
                         this.modelSettings.enableToolResultLimit = false;
                         this.modelSettings.max_tool_result_tokens = 0;
                         this.modelSettings.ctKwargEntries = [];

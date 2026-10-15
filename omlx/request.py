@@ -80,6 +80,9 @@ class SamplingParams:
 
     # Thinking budget (None = unlimited thinking)
     thinking_budget: Optional[int] = None
+    # When the budget runs out mid-sentence, let the model finish the
+    # sentence or line (bounded) before the close-think is forced.
+    thinking_budget_finish_sentence: bool = False
 
     # Compiled grammar for constrained decoding (xgrammar CompiledGrammar).
     # Typed as Any to avoid a hard dependency on xgrammar at import time.
