@@ -188,7 +188,11 @@ def _patch_ssm_sequential():
         time_step_limit=(0.001, 100.0),
         mask=None,
         lengths=None,
+        **kwargs,
     ):
+        # Newer mlx-lm ssm functions take extra keywords (e.g. promote_dt, which
+        # nemotron_h passes on every call). Forward whatever the caller sent so
+        # this wrapper works with both old and new mlx-lm.
         S = hidden_states.shape[1]
         if (
             _capture.armed
@@ -201,6 +205,8 @@ def _patch_ssm_sequential():
             ys = []
             states = []
             s = state
+            # ssm_update_kernel takes promote_dt positionally after time_step_limit.
+            extra = (kwargs["promote_dt"],) if "promote_dt" in kwargs else ()
             for i in range(S):
                 y, s = kernel_step(
                     hidden_states[:, i : i + 1],
@@ -212,6 +218,7 @@ def _patch_ssm_sequential():
                     dt_bias,
                     s,
                     time_step_limit,
+                    *extra,
                 )
                 ys.append(y)
                 states.append(s)
@@ -219,7 +226,7 @@ def _patch_ssm_sequential():
             return mx.concatenate(ys, axis=1), s
         return inner(
             hidden_states, A_log, B, C, D, dt, dt_bias, state,
-            time_step_limit, mask, lengths,
+            time_step_limit, mask, lengths, **kwargs,
         )
 
     setattr(ssm_update, _MARKER, True)
