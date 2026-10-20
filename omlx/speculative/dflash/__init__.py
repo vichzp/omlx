@@ -29,6 +29,7 @@ from mlx_vlm.utils import get_model_path
 
 from ...model_settings import MAX_LIGHTNING_MTP_DRAFT_TOKENS
 from ...patches import qwen35_packed_linear
+from . import lilicorr
 from .drafter import DFlashDrafter
 from .variants import apply_partial_rope, load_mask_embedding
 
@@ -126,9 +127,17 @@ def load_dflash_drafter(
     checkpoint's context window.
     """
     adaptive = resolve_verify_mode(verify_mode)
-    model, kind = load_drafter(path, kind="dflash")
-    if kind != "dflash":
-        raise ValueError(f"{path} resolved to drafter kind {kind!r}, expected 'dflash'")
+    local = get_model_path(path)
+    config = json.loads((local / "config.json").read_text())
+    if lilicorr.is_lilicorr_config(config):
+        # mlx-vlm has no LiLiCorr class.
+        model = lilicorr.load_lilicorr(local)
+    else:
+        model, kind = load_drafter(path, kind="dflash")
+        if kind != "dflash":
+            raise ValueError(
+                f"{path} resolved to drafter kind {kind!r}, expected 'dflash'"
+            )
     if quant_enabled and not getattr(model.config, "quantization", None):
         count = quantize_drafter(model, bits=quant_bits, group_size=quant_group_size)
         logger.info(
@@ -137,8 +146,6 @@ def load_dflash_drafter(
             quant_bits,
             quant_group_size,
         )
-    local = get_model_path(path)
-    config = json.loads((local / "config.json").read_text())
     apply_partial_rope(model, config)
     mask_path = local / "mask_embedding.pt"
     mask_embedding = (
