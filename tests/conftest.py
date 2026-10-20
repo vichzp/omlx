@@ -100,7 +100,7 @@ def apply_drafter_target(monkeypatch):
         "_omlx_drafter_single_row",
         "_omlx_drafter_target",
     )
-    layer_names = ("__call__", "_omlx_drafter_capture_wrapped")
+    layer_names = ("__call__",)
 
     def apply(model):
         targets = [(type(model), model_names)]

@@ -49,9 +49,11 @@ def record(hidden: Any) -> None:
 
 
 def _wrap_layer(layer_cls: Any) -> None:
-    if getattr(layer_cls, "_omlx_drafter_capture_wrapped", False):
-        return
     original_call = layer_cls.__call__
+    # Checked on the function, not the class: another patch may reinstall
+    # the layer call on a later model load.
+    if getattr(original_call, "_omlx_drafter_capture", False):
+        return
 
     def __call__(self, *args, **kwargs):
         out = original_call(self, *args, **kwargs)
@@ -60,8 +62,12 @@ def _wrap_layer(layer_cls: Any) -> None:
             sink.add(out)
         return out
 
+    __call__._omlx_drafter_capture = True
+    # Keep the Nemotron-H MTP patch's marker so it does not reinstall its
+    # block call over this wrapper on the next model load.
+    if getattr(original_call, "_omlx_nh_mtp", False):
+        __call__._omlx_nh_mtp = True
     layer_cls.__call__ = __call__
-    layer_cls._omlx_drafter_capture_wrapped = True
 
 
 def _decoder_layers(model: Any):

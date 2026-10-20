@@ -73,3 +73,41 @@ def test_nemotron_h_layers_are_found_under_backbone():
 @pytest.mark.parametrize("model_type", ["nemotron_h", "nemotron_h_puzzle"])
 def test_nemotron_h_takes_a_batched_block_drafter(model_type):
     assert dflash_batched_supported(model_type, "batched")
+
+
+def _captured(layer, x):
+    sink = drafter_target._Sink({0})
+    drafter_target._CAPTURE.sink = sink
+    try:
+        layer(x)
+    finally:
+        drafter_target._CAPTURE.sink = None
+    return sink.outputs
+
+
+def test_layer_capture_is_reinstalled_after_another_patch_replaces_it():
+    class Layer:
+        def __call__(self, x):
+            return x + 1
+
+    drafter_target._wrap_layer(Layer)
+
+    # A later model load reinstalls the layer call (Nemotron-H's MTP patch
+    # does this for any block call without its marker).
+    def reinstalled(self, x):
+        return x + 1
+
+    Layer.__call__ = reinstalled
+    drafter_target._wrap_layer(Layer)
+    assert _captured(Layer(), 1) == {0: 2}
+
+
+def test_layer_capture_keeps_the_nemotron_h_marker():
+    class Block:
+        def __call__(self, x):
+            return x
+
+    Block.__call__._omlx_nh_mtp = True
+    drafter_target._wrap_layer(Block)
+    assert getattr(Block.__call__, "_omlx_nh_mtp", False)
+    assert _captured(Block(), 3) == {0: 3}
