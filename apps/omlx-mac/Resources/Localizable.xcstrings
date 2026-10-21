@@ -22486,6 +22486,132 @@
         }
       }
     },
+    "settings.advanced.splash_max_memory.invalid" : {
+      "comment" : "Error when the per-model Splash memory limit is not a positive size",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter a size above 0 GB, or leave it empty."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "0 GB より大きい値を入力するか、空欄にしてください。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "0 GB보다 큰 값을 입력하거나 비워 두세요."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Введите размер больше 0 ГБ или оставьте поле пустым."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入大于 0 GB 的大小，或留空。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "請輸入大於 0 GB 的大小，或留空。"
+          }
+        }
+      }
+    },
+    "settings.advanced.splash_max_memory.label" : {
+      "comment" : "Row label for the per-model Splash memory limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash Memory Limit"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash のメモリ上限"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash 메모리 한도"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Лимит памяти Splash"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash 内存上限"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash 記憶體上限"
+          }
+        }
+      }
+    },
+    "settings.advanced.splash_max_memory.sub" : {
+      "comment" : "Sublabel for the per-model Splash memory limit",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Memory Splash may use for this model. It keeps what fits in RAM and streams the remaining experts and n-gram table from the SSD. Empty uses the limit in Settings > Integrations, or enough for the full context."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このモデルで Splash が使えるメモリです。収まる分は RAM に置き、残りのエキスパートと n-gram テーブルは SSD から読み込みます。空欄の場合は設定 > 連携の上限、またはコンテキスト全体に足りる量を使います。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이 모델에 Splash가 쓸 수 있는 메모리입니다. 들어가는 만큼 RAM에 두고 나머지 전문가와 n-gram 테이블은 SSD에서 읽습니다. 비워 두면 설정 > 통합의 한도 또는 전체 컨텍스트에 충분한 양을 사용합니다."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Память, которую Splash может использовать для этой модели. То, что помещается, он держит в RAM, а остальных экспертов и таблицу n-грамм читает с SSD. Пусто — лимит из Настройки > Интеграции или достаточно для полного контекста."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash 可为此模型使用的内存。放得下的部分保留在 RAM，其余专家和 n-gram 表从 SSD 读取。留空则使用设置 > 集成中的上限，或足以容纳完整上下文的量。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Splash 可為此模型使用的記憶體。放得下的部分留在 RAM，其餘專家與 n-gram 表從 SSD 讀取。留空則使用設定 > 整合中的上限，或足以容納完整上下文的量。"
+          }
+        }
+      }
+    },
     "settings.advanced.external_engine.sub" : {
       "comment" : "Sublabel for the external engine toggle",
       "extractionState" : "manual",

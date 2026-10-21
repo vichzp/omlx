@@ -509,6 +509,11 @@ class ModelSettings:
     # External engine serving this model instead of oMLX's MLX engines
     # (omlx/engine/splash.py). None runs the model in-process.
     external_engine: Optional[str] = None
+    # Metal memory budget for Splash serving this model, in GiB. None falls
+    # back to the global integrations.splash_max_memory_gb, then to the
+    # estimate. Splash streams experts and the PLE table into what this
+    # leaves, so it replaces the resident-expert fraction under Splash.
+    splash_max_memory_gb: Optional[float] = None
 
     # Security: opt-in per model. When True, mlx-lm/mlx-vlm/mlx-embeddings/reranker
     # loaders are allowed to execute custom Python from the model repository
@@ -595,6 +600,8 @@ class ModelSettings:
                     "vlm_mtp decode path does not apply"
                 )
         validate_moe_expert_offload(self.to_dict())
+        if self.splash_max_memory_gb is not None and not self.splash_max_memory_gb > 0:
+            raise ValueError("splash_max_memory_gb must be > 0")
 
     def to_dict(self) -> dict:
         """Convert to dictionary, excluding None values.

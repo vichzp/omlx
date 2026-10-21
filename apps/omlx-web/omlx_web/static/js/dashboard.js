@@ -301,6 +301,7 @@
                 qwen35_oq_a8_min_tokens: 128,
                 external_engine: '',
                 external_engines: [],
+                splash_max_memory_gb: null,
                 model_format: null,
                 trust_remote_code: false,
                 embedding_audio_enabled: false,
@@ -2226,6 +2227,7 @@
                     is_diffusion_model: isDiffusion,
                     external_engine: s.external_engine || '',
                     external_engines: model?.external_engines || [],
+                    splash_max_memory_gb: s.splash_max_memory_gb ?? null,
                     model_format: model?.model_format || null,
                     trust_remote_code: s.trust_remote_code || false,
                     embedding_audio_enabled: s.embedding_audio_enabled || false,
@@ -2240,6 +2242,19 @@
                     || percent < MOE_EXPERT_OFFLOAD_MIN_PERCENT
                     || percent > MOE_EXPERT_OFFLOAD_MAX_PERCENT
                 );
+            },
+
+            isFlashNextModel() {
+                // Qwen3.8-Flash-Next and checkpoints of its architecture (qwen4_exp*).
+                const type = String(this.selectedModel?.config_model_type || '').toLowerCase().replace(/-/g, '_');
+                return type.startsWith('qwen4_exp');
+            },
+
+            splashMaxMemoryInvalid() {
+                // Empty clears the per-model limit; anything else must be a size above 0.
+                const value = this.modelSettings.splash_max_memory_gb;
+                if (value === null || value === undefined || value === '') return false;
+                return !(Number(value) > 0);
             },
 
             onMoeExpertOffloadResidentBlur() {
@@ -3275,6 +3290,9 @@
                         : null,
                     trust_remote_code: ms.trust_remote_code,
                     external_engine: ms.external_engine || null,
+                    splash_max_memory_gb: Number(ms.splash_max_memory_gb) > 0
+                        ? Number(ms.splash_max_memory_gb)
+                        : null,
                 };
                 if (isDiffusion) {
                     Object.assign(payload, {
@@ -3315,6 +3333,7 @@
                         specprefill_keep_pct: null,
                         specprefill_threshold: null,
                         external_engine: null,
+                        splash_max_memory_gb: null,
                         dflash_enabled: false,
                         dflash_draft_model: null,
                         dflash_draft_quant_enabled: false,
@@ -3354,6 +3373,11 @@
                 const qwenAneValidationError = this.validateQwenAneSettings();
                 if (qwenAneValidationError) {
                     alert(qwenAneValidationError);
+                    return;
+                }
+
+                if (this.effectiveExternalEngine() === 'splash' && this.isFlashNextModel() && this.splashMaxMemoryInvalid()) {
+                    alert(window.t('modal.model_settings.splash_max_memory_invalid'));
                     return;
                 }
 

@@ -417,6 +417,8 @@ class ModelSettingsRequest(BaseModel):
     specprefill_threshold: int | None = None
     # External engine (omlx/engine/splash.py); null runs the model in-process
     external_engine: str | None = None
+    # Splash memory limit for this model in GiB; null uses the global one
+    splash_max_memory_gb: float | None = None
     # DFlash (block diffusion speculative decoding)
     dflash_enabled: bool | None = None
     dflash_draft_model: str | None = None
@@ -3147,6 +3149,13 @@ async def update_model_settings(
             if target is None:
                 raise HTTPException(status_code=400, detail=reason)
         current_settings.external_engine = engine_id
+    if "splash_max_memory_gb" in sent:
+        memory = request.splash_max_memory_gb
+        if memory is not None and not memory > 0:
+            raise HTTPException(
+                status_code=400, detail="splash_max_memory_gb must be > 0"
+            )
+        current_settings.splash_max_memory_gb = memory
     # DFlash settings
     if "dflash_enabled" in sent:
         new_dflash_enabled = (

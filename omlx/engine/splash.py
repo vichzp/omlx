@@ -42,7 +42,7 @@ from transformers import AutoTokenizer
 
 from ..api.utils import _consolidate_system_messages
 from ..exceptions import InvalidRequestError
-from ..gguf import SPLIT_VARIANT
+from ..gguf import SPLIT_VARIANT, GgufError, tensor_bytes
 from ..utils.hardware import get_chip_name, parse_chip_info
 from ..utils.proc_memory import get_phys_footprint, list_process_group_pids
 from .base import BaseEngine, GenerationOutput
@@ -79,6 +79,8 @@ THINKING_BUDGET_VERSION = (1, 3, 2)
 NVIDIA_QUANTIZATION_VERSION = (1, 3, 2)
 FLASH_NEXT_VERSION = (1, 4, 0)
 SPLIT_GGUF_VERSION = (1, 4, 0)
+# Splash streams routed experts and the PLE table from the SSD from 1.4.0 on.
+STREAMING_VERSION = (1, 4, 0)
 _MODELOPT_ALGOS = frozenset({"NVFP4", "W4A16_NVFP4", "FP8"})
 _COMPRESSED_TENSORS_FORMATS = frozenset({"nvfp4-pack-quantized", "float-quantized"})
 SPLASH_MAX_CONTEXT = 262144
@@ -148,6 +150,9 @@ SPLASH_DRAFT_REPOS = {
 _DRAFT_LOAD_RATIO = 1 / 3
 # Scratch Splash plans beside the weights: prefill, decode and lane states.
 _RUNTIME_RESERVE_BYTES = 3 * 1024**3
+# Smallest RAM store a streamed target keeps its experts and PLE rows in;
+# Splash's own example runs the 35B on a 4 GiB expert store.
+_STREAM_FLOOR_BYTES = 4 * 1024**3
 # Content parts Splash takes beside text: images (it also reads PDFs, which
 # oMLX's request models do not carry).
 _SPLASH_MEDIA_TYPES = frozenset({"image_url", "input_image", "image"})
@@ -562,6 +567,55 @@ def _weight_bytes(path: Path) -> int:
     return sum((path / name).stat().st_size for name in names)
 
 
+def _streamed_tensor(name: str) -> bool:
+    """Whether Splash 1.4.0+ can stream a tensor from the SSD: a routed
+    expert bank (GGUF ``*_exps``, MLX ``switch_mlp``/``experts``) or the
+    Flash-Next PLE table."""
+    return (
+        "_exps." in name
+        or "per_layer_token_embd" in name
+        or ".switch_mlp." in name
+        or ".experts." in name
+    )
+
+
+def _safetensors_tensor_bytes(path: Path) -> dict[str, int]:
+    sizes: dict[str, int] = {}
+    for shard in path.glob("*.safetensors"):
+        with open(shard, "rb") as stream:
+            length = int.from_bytes(stream.read(8), "little")
+            # A real header is far below this; a larger length is not one.
+            if length > 100 << 20:
+                raise ValueError(f"{shard.name} has no safetensors header")
+            header = json.loads(stream.read(length))
+        for name, info in header.items():
+            if name != "__metadata__":
+                start, end = info["data_offsets"]
+                sizes[name] = end - start
+    return sizes
+
+
+def _tensor_split(path: Path) -> tuple[int, int] | None:
+    """(bytes the weight files' tensors take, bytes of them Splash can
+    stream), or None when a header cannot be sized. Counting tensors rather
+    than file sizes skips data a rewritten GGUF no longer points at."""
+    source = _gguf_source(_read_config(path) or {})
+    try:
+        if source is None:
+            sizes = _safetensors_tensor_bytes(path)
+        else:
+            sizes = {}
+            for part in source.get("parts") or []:
+                part_sizes = tensor_bytes(path / part)
+                if part_sizes is None:
+                    return None
+                sizes.update(part_sizes)
+    except (OSError, ValueError, KeyError, GgufError):
+        return None
+    streamed = sum(size for name, size in sizes.items() if _streamed_tensor(name))
+    return sum(sizes.values()), streamed
+
+
 def _kv_bytes_per_token(text: dict, kv_format: str) -> int:
     layer_types = text.get("layer_types") or []
     layers = sum(1 for kind in layer_types if kind == "full_attention")
@@ -592,6 +646,39 @@ def splash_memory_estimate(
     kv = _kv_bytes_per_token(text, kv_format) * context
     draft = int(_safetensors_bytes(draft_path) * _DRAFT_LOAD_RATIO)
     return _weight_bytes(path) + draft + _RUNTIME_RESERVE_BYTES + kv
+
+
+def splash_min_memory_estimate(
+    model_path: str | Path,
+    draft_path: Path,
+    max_context: int | None,
+    kv_format: str,
+    binary: SplashBinary,
+) -> int:
+    """The smallest budget Splash can hold ``max_context`` tokens in.
+
+    From 1.4.0 Splash streams routed experts and the PLE table from the SSD
+    through a RAM store sized from what its budget leaves, so it needs only
+    the rest of the weights plus a small store; earlier builds hold every
+    weight (``splash_memory_estimate``).
+    """
+    full = splash_memory_estimate(model_path, draft_path, max_context, kv_format)
+    if binary.version_tuple < STREAMING_VERSION:
+        return full
+    path = Path(model_path)
+    split = _tensor_split(path)
+    if split is None or not split[1]:
+        return full
+    tensors, streamed = split
+    source = _gguf_source(_read_config(path) or {})
+    files = (
+        _safetensors_bytes(path)
+        if source is None
+        else sum((path / part).stat().st_size for part in source.get("parts") or [])
+    )
+    # The weight files' bytes in ``full`` give way to the tensors Splash holds
+    # and a store for the streamed ones; the projector and nested shards stay.
+    return full - files + (tensors - streamed) + min(streamed, _STREAM_FLOOR_BYTES)
 
 
 # -- model staging -------------------------------------------------------------
