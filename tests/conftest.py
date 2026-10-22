@@ -290,10 +290,15 @@ def _gguf_value(value) -> bytes:
 def write_gguf():
     """Write a GGUF file of a header with ``metadata`` and ``size`` bytes in all."""
 
-    def write(path: Path, metadata: dict, size: int = 0) -> Path:
-        header = b"GGUF" + struct.pack("<IQQ", 3, 0, len(metadata))
+    def write(path: Path, metadata: dict, size: int = 0, tensors=()) -> Path:
+        """``tensors``: (name, dims, ggml type id) infos after the metadata."""
+        header = b"GGUF" + struct.pack("<IQQ", 3, len(tensors), len(metadata))
         for key, value in metadata.items():
             header += struct.pack("<Q", len(key)) + key.encode() + _gguf_value(value)
+        for name, dims, kind in tensors:
+            header += struct.pack("<Q", len(name)) + name.encode()
+            header += struct.pack("<I", len(dims)) + b"".join(struct.pack("<Q", d) for d in dims)
+            header += struct.pack("<IQ", kind, 0)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(header + b"\0" * max(0, size - len(header)))
         return path

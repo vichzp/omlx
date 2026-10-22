@@ -141,6 +141,8 @@ struct ModelSettingsDTO: Codable, Equatable, Sendable {
     let trustRemoteCode: Bool?
     /// External engine serving the model ("splash"); nil runs it in-process.
     var externalEngine: String? = nil
+    /// Splash memory limit in GiB; nil uses the Integrations limit.
+    var splashMaxMemoryGb: Double? = nil
     var embeddingAudioEnabled: Bool? = nil
     var embeddingAudioMaxSeconds: Double? = nil
     // Chat-template kwargs (free-form dict + a sibling list of keys the
@@ -231,6 +233,7 @@ struct ModelSettingsPatch: Encodable, Equatable, Sendable {
     // Security
     var trustRemoteCode: Bool? = nil
     var externalEngine: String?? = nil // .some(nil) sends JSON null (in-process).
+    var splashMaxMemoryGb: Double?? = nil // .some(nil) sends JSON null (Integrations limit).
     var embeddingAudioEnabled: Bool? = nil
     var embeddingAudioMaxSeconds: Double?? = nil // .some(nil) sends JSON null (30 s default).
     var reasoningParser: String? = nil

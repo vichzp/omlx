@@ -43,7 +43,7 @@ final class ModelSettingsScreenVM {
         case thinkingBudgetEnabled, thinkingBudgetTokens
         case limitToolResults, toolResultLimitTokens
         case forceSampling, isPinned, isFavorite
-        case trustRemoteCode, externalEngine
+        case trustRemoteCode, externalEngine, splashMaxMemoryGb
         case embeddingAudioEnabled, embeddingAudioMaxSeconds
         case reasoningParser
         case chatTemplateKwargs
@@ -288,6 +288,30 @@ final class ModelSettingsScreenVM {
         guard externalEngine.isEmpty, model?.isGGUF == true else { return externalEngine }
         let engines = model?.externalEngines ?? []
         return engines.first(where: { $0.compatible })?.id ?? engines.first?.id ?? ""
+    }
+
+    /// Splash memory limit in GB; empty uses the Integrations limit.
+    var splashMaxMemoryGb: String = ""
+    /// The Integrations limit, shown as the field's placeholder.
+    var splashMaxMemoryGlobalGb: String = ""
+
+    /// Shown for Qwen3.8-Flash-Next (and checkpoints of its architecture,
+    /// `qwen4_exp*`) while Splash serves it.
+    var showsSplashMaxMemory: Bool {
+        effectiveExternalEngine == "splash" && normalizedConfigModelType.hasPrefix("qwen4_exp")
+    }
+
+    var splashMaxMemoryInvalid: Bool {
+        let text = splashMaxMemoryGb.trimmingCharacters(in: .whitespaces)
+        guard showsSplashMaxMemory, !text.isEmpty else { return false }
+        guard let gigabytes = Double(text) else { return true }
+        return !(gigabytes > 0)
+    }
+
+    static var splashMaxMemoryInvalidMessage: String {
+        String(localized: "settings.advanced.splash_max_memory.invalid",
+               defaultValue: "Enter a size above 0 GB, or leave it empty.",
+               comment: "Error when the per-model Splash memory limit is not a positive size")
     }
 
     // Embedding audio tower. Empty seconds keeps the 30 s processor default.
@@ -596,7 +620,7 @@ final class ModelSettingsScreenVM {
             return false
         case .temperature, .ttl, .isPinned, .isFavorite, .trustRemoteCode:
             return false
-        case .externalEngine:
+        case .externalEngine, .splashMaxMemoryGb:
             return true
         case .embeddingAudioEnabled, .embeddingAudioMaxSeconds:
             return false
@@ -688,7 +712,8 @@ final class ModelSettingsScreenVM {
             let models = try await client.listModels().models
             let profiles = try await client.listModelProfiles(id: modelID).profiles
             let templates = try await client.listProfileTemplates().templates
-            let defaults = try await client.getGlobalSettings().sampling
+            let globalSettings = try await client.getGlobalSettings()
+            let defaults = globalSettings.sampling
             guard sequence == loadSequence else { return }
             if preservingEdits && profileDirty { return }
             self.allModels = models
@@ -738,6 +763,7 @@ final class ModelSettingsScreenVM {
                 self.isFavorite = s?.isFavorite ?? false
                 self.trustRemoteCode = s?.trustRemoteCode ?? false
                 self.externalEngine = s?.externalEngine ?? ""
+                self.splashMaxMemoryGb = s?.splashMaxMemoryGb.map { Self.formatPct($0) } ?? ""
                 self.embeddingAudioEnabled = s?.embeddingAudioEnabled ?? false
                 self.embeddingAudioMaxSeconds = s?.embeddingAudioMaxSeconds.map { Self.formatPct($0) } ?? ""
                 self.reasoningParser = s?.reasoningParser ?? ""
@@ -799,6 +825,8 @@ final class ModelSettingsScreenVM {
             self.profiles = profiles
             self.templates = templates
             self.serverDefaultSampling = defaults
+            self.splashMaxMemoryGlobalGb = globalSettings.integrations?.splashMaxMemoryGb
+                .map { Self.formatPct($0) } ?? ""
             // Resolve display scope from the source_template of the active
             // model profile (if any) — so applying the "Balanced" preset
             // lights up the Preset chip, not the local model copy.
@@ -906,6 +934,17 @@ final class ModelSettingsScreenVM {
         case .trustRemoteCode:         patch.trustRemoteCode = trustRemoteCode
         case .externalEngine:
             patch.externalEngine = .some(externalEngine.isEmpty ? nil : externalEngine)
+        case .splashMaxMemoryGb:
+            guard showsSplashMaxMemory else { return }
+            let text = splashMaxMemoryGb.trimmingCharacters(in: .whitespaces)
+            if text.isEmpty {
+                patch.splashMaxMemoryGb = .some(nil)
+            } else if let gigabytes = Double(text), gigabytes > 0 {
+                patch.splashMaxMemoryGb = gigabytes
+            } else {
+                lastError = Self.splashMaxMemoryInvalidMessage
+                return
+            }
         case .embeddingAudioEnabled:   patch.embeddingAudioEnabled = embeddingAudioEnabled
         case .embeddingAudioMaxSeconds:
             let text = embeddingAudioMaxSeconds.trimmingCharacters(in: .whitespaces)

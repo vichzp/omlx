@@ -49,7 +49,7 @@ Unloading the model stops the Splash process. Splash runs in its own process gro
 | oMLX | Splash |
 | --- | --- |
 | Model's max context window, when set | `--max-context` (at most 256K); Splash refuses to start when its memory budget cannot hold it |
-| Integrations → Memory limit (empty: enough for the model's context window) | `--max-memory`, never more than the oMLX memory limit leaves free |
+| Model Settings → Advanced → Splash memory limit (shown for Flash-Next), else Integrations → Memory limit (both empty: enough for the model's context window) | `--max-memory`, never more than the oMLX memory limit leaves free |
 | Integrations → KV cache precision | `--kv-format` |
 | Integrations → SSD cache (empty: the oMLX SSD cache size, 0: off) | `--max-cache-disk` with `--persistent-cache` under `<SSD cache dir>/splash/` |
 | Integrations → Neural Engine prefill | off adds `--disable-ane` |
@@ -66,7 +66,7 @@ When the memory left under the oMLX limit cannot hold the full window (a 32 GB M
 
 After Splash starts, oMLX counts the budget Splash planned as the model's size, and the memory guard counts the Splash process's memory as oMLX's own. Loading other models therefore sees Splash's share, and evicting the Splash model frees it.
 
-With Splash 1.4.0, Flash-Next can stream experts and its n-gram table from SSD when they do not fit in memory. It can also spill active KV cache to SSD when a writable SSD cache has room. Splash plans these stores within the memory limit oMLX passes; no extra oMLX setting is needed.
+With Splash 1.4.0, Flash-Next can stream experts and its n-gram table from SSD when they do not fit in memory. It can also spill active KV cache to SSD when a writable SSD cache has room. Splash plans these stores within the memory limit oMLX passes, so a Flash-Next model on Splash gets its own Splash memory limit right under Use external engine in Model Settings. When a model's context window is set, oMLX checks it against the smallest budget Splash 1.4.0 can stream the model in (the weights it holds, a small expert store, the draft and the KV pages) rather than against every weight byte.
 
 ## Benchmarks
 

@@ -50,11 +50,13 @@ from omlx.engine.splash import (
     splash_effort,
     splash_memory_estimate,
     splash_messages,
+    splash_min_memory_estimate,
     splash_repo_id,
     stage_model,
 )
 from omlx.engine_pool import EngineEntry, EnginePool
 from omlx.exceptions import InvalidRequestError, ModelLoadingError
+from omlx.gguf import tensor_bytes
 from omlx.model_discovery import discover_models
 from omlx.model_settings import ModelSettings
 from omlx.settings import GlobalSettings
@@ -1694,6 +1696,121 @@ class TestMemoryEstimate:
         _add_optiq_vision(model)
 
         assert splash_memory_estimate(model, draft, 1024, "int8") == before + 512
+
+
+def _write_safetensors(path: Path, tensors: dict[str, int]) -> None:
+    """A safetensors file whose header lists ``tensors`` (name -> bytes)."""
+    header, offset = {}, 0
+    for name, size in tensors.items():
+        header[name] = {"dtype": "U8", "shape": [size], "data_offsets": [offset, offset + size]}
+        offset += size
+    blob = json.dumps(header).encode()
+    path.write_bytes(len(blob).to_bytes(8, "little") + blob + b"\0" * offset)
+
+
+class TestStreamingEstimate:
+    def test_tensor_bytes_sizes_by_type_not_offset_gaps(self, tmp_path, write_gguf):
+        path = write_gguf(
+            tmp_path / "m.gguf",
+            {"general.architecture": "qwen4exp"},
+            tensors=[
+                ("blk.0.ffn_up_exps.weight", [256, 8], 23),  # IQ4_XS: 136 B / 256
+                ("blk.0.attn_q.weight", [64, 2], 8),  # Q8_0: 34 B / 32
+                ("per_layer_token_embd.weight", [32, 4], 7),  # Q5_1: 24 B / 32
+            ],
+        )
+
+        assert tensor_bytes(path) == {
+            "blk.0.ffn_up_exps.weight": 8 * 136,
+            "blk.0.attn_q.weight": 4 * 34,
+            "per_layer_token_embd.weight": 4 * 24,
+        }
+
+    def test_tensor_bytes_none_for_an_unsized_type(self, tmp_path, write_gguf):
+        path = write_gguf(tmp_path / "m.gguf", {}, tensors=[("x.weight", [32], 99)])
+
+        assert tensor_bytes(path) is None
+
+    def test_streamed_weights_leave_a_floor_from_1_4_0(self, tmp_path):
+        model = _write_model(tmp_path / "m")
+        _write_safetensors(
+            model / "model.safetensors",
+            {
+                "language_model.model.layers.0.mlp.switch_mlp.up_proj.weight": 1024,
+                "language_model.model.layers.0.self_attn.q_proj.weight": 512,
+            },
+        )
+        draft = _write_draft(tmp_path / "draft")
+        full = splash_memory_estimate(model, draft, 4096, "int8")
+        # The file's bytes (header included) give way to its tensors.
+        held = full - (model / "model.safetensors").stat().st_size + 512
+
+        # Before 1.4.0 Splash holds every weight.
+        assert splash_min_memory_estimate(model, draft, 4096, "int8", _binary("1.3.2")) == full
+        # From 1.4.0 the experts stream; a bank under the floor counts whole.
+        assert (
+            splash_min_memory_estimate(model, draft, 4096, "int8", _binary("1.4.0"))
+            == held + 1024
+        )
+        # A larger bank shrinks to the floor.
+        splash_mod._STREAM_FLOOR_BYTES, floor = 256, splash_mod._STREAM_FLOOR_BYTES
+        try:
+            assert (
+                splash_min_memory_estimate(model, draft, 4096, "int8", _binary("1.4.0"))
+                == held + 256
+            )
+        finally:
+            splash_mod._STREAM_FLOOR_BYTES = floor
+
+    def test_unreadable_headers_keep_the_full_estimate(self, tmp_path):
+        # _write_model's weights are not a safetensors header.
+        model = _write_model(tmp_path / "m")
+        draft = _write_draft(tmp_path / "draft")
+
+        assert splash_min_memory_estimate(
+            model, draft, 4096, "int8", _binary("1.4.0")
+        ) == splash_memory_estimate(model, draft, 4096, "int8")
+
+
+class TestPerModelMemoryLimit:
+    def test_setting_validates_and_stays_out_of_profiles(self):
+        from omlx.model_profiles import EXCLUDED_FROM_PROFILES
+
+        assert ModelSettings(splash_max_memory_gb=40).splash_max_memory_gb == 40
+        with pytest.raises(ValueError, match="splash_max_memory_gb"):
+            ModelSettings(splash_max_memory_gb=0)
+        assert "splash_max_memory_gb" in EXCLUDED_FROM_PROFILES
+
+    def test_model_limit_wins_over_the_global_one(
+        self, tmp_path, launchers, global_settings
+    ):
+        launchers("splash")
+        pool, entry = _pool(tmp_path)
+        pool._get_final_ceiling = lambda: 200 * GIB
+        global_settings.integrations.splash_max_memory_gb = 8
+
+        engine = pool._external_engine_for(
+            entry, ModelSettings(external_engine="splash"), "vlm"
+        )
+        assert engine._options.max_memory_bytes == 8 * GIB
+
+        engine = pool._external_engine_for(
+            entry, ModelSettings(external_engine="splash", splash_max_memory_gb=6), "vlm"
+        )
+        assert engine._options.max_memory_bytes == 6 * GIB
+
+    async def test_admin_api_sets_and_clears_the_limit(
+        self, tmp_path, launchers, global_settings
+    ):
+        launchers("splash")
+        pool, _ = _pool(tmp_path)
+
+        saved = await _put_model(pool, ModelSettings(), splash_max_memory_gb=40)
+        assert saved.splash_max_memory_gb == 40
+        saved = await _put_model(pool, saved, splash_max_memory_gb=None)
+        assert saved.splash_max_memory_gb is None
+        with pytest.raises(HTTPException, match="splash_max_memory_gb"):
+            await _put_model(pool, saved, splash_max_memory_gb=0)
 
 
 class TestProcessMemory:

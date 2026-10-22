@@ -1203,6 +1203,9 @@ private struct AdvancedPage: View {
         ListGroup {
             if showsLLMRows, let engines = vm.model?.externalEngines, !engines.isEmpty {
                 ExternalEngineRow(vm: vm, client: client, engines: engines)
+                if vm.showsSplashMaxMemory {
+                    SplashMaxMemoryRow(vm: vm, client: client)
+                }
             }
             // Security-sensitive row — flagged red to match the HTML
             // editor's visual treatment. HF custom-code execution gives
@@ -1486,6 +1489,33 @@ private struct MemorySavingSection: View {
         return String(localized: "settings.experimental.turboquant.sub",
                       defaultValue: "Quantize the KV cache during prefill. Saves memory at a small quality cost.",
                       comment: "Sublabel describing TurboQuant KV cache")
+    }
+}
+
+/// Splash's memory limit for Qwen3.8-Flash-Next, whose remaining experts
+/// and n-gram table Splash streams from the SSD. Per-model; saves on commit.
+private struct SplashMaxMemoryRow: View {
+    @Bindable var vm: ModelSettingsScreenVM
+    let client: OMLXClient
+
+    var body: some View {
+        Row(label: String(localized: "settings.advanced.splash_max_memory.label",
+                          defaultValue: "Splash Memory Limit",
+                          comment: "Row label for the per-model Splash memory limit"),
+            sublabel: vm.splashMaxMemoryInvalid
+                ? ModelSettingsScreenVM.splashMaxMemoryInvalidMessage
+                : String(localized: "settings.advanced.splash_max_memory.sub",
+                         defaultValue: "Memory Splash may use for this model. It keeps what fits in RAM and streams the remaining experts and n-gram table from the SSD. Empty uses the limit in Settings > Integrations, or enough for the full context.",
+                         comment: "Sublabel for the per-model Splash memory limit")) {
+            TextInput(text: $vm.splashMaxMemoryGb,
+                      placeholder: vm.splashMaxMemoryGlobalGb.isEmpty
+                          ? String(localized: "integrations.splash.auto",
+                                   defaultValue: "Auto",
+                                   comment: "Placeholder for an automatic Splash size")
+                          : vm.splashMaxMemoryGlobalGb,
+                      mono: true, suffix: "GB", width: .controlNarrow)
+                .onSubmit { Task { await vm.save(.splashMaxMemoryGb, client: client) } }
+        }
     }
 }
 

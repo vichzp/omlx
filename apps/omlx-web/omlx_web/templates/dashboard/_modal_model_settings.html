@@ -972,6 +972,25 @@
                             </div>
                         </div>
 
+                        <!-- Splash memory limit for Flash-Next, which Splash streams into what this leaves -->
+                        <div class="px-4 py-3.5 space-y-2"
+                             x-show="effectiveExternalEngine() === 'splash' && isFlashNextModel()" x-cloak>
+                            <div class="min-w-0">
+                                <label for="splash-max-memory" class="text-sm font-medium text-neutral-700">{{ t('modal.model_settings.splash_max_memory') }}</label>
+                                <p class="text-xs text-neutral-500 mt-0.5">{{ t('modal.model_settings.splash_max_memory_hint') }}</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <input id="splash-max-memory" type="number" min="1" step="any" inputmode="decimal"
+                                       x-model="modelSettings.splash_max_memory_gb"
+                                       :placeholder="globalSettings.integrations.splash_max_memory_gb ?? ''"
+                                       :aria-invalid="splashMaxMemoryInvalid()"
+                                       :class="splashMaxMemoryInvalid() ? 'border-red-200 focus:ring-red-500' : 'border-neutral-200 focus:ring-neutral-900'"
+                                       class="w-24 px-4 py-2.5 border rounded-lg text-sm focus:ring-2 focus:border-transparent transition-all bg-white">
+                                <span class="text-sm font-medium text-neutral-500">GB</span>
+                            </div>
+                            <p x-show="splashMaxMemoryInvalid()" x-cloak class="text-xs text-red-600">{{ t('modal.model_settings.splash_max_memory_invalid') }}</p>
+                        </div>
+
                         <!-- Trust Remote Code (security-sensitive) -->
                         <div class="px-4 py-3.5 bg-red-50"
                              :class="!modelSettings.is_diffusion_model && modelSettings.external_engines.length ? '' : 'rounded-t-xl'">

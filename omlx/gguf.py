@@ -328,6 +328,50 @@ def read_metadata(
     return metadata
 
 
+# Elements per block and bytes per block of the ggml tensor types, by type id.
+_TYPE_BLOCKS = {
+    0: (1, 4), 1: (1, 2), 2: (32, 18), 3: (32, 20), 6: (32, 22), 7: (32, 24),
+    8: (32, 34), 9: (32, 36), 10: (256, 84), 11: (256, 110), 12: (256, 144),
+    13: (256, 176), 14: (256, 210), 15: (256, 292), 16: (256, 66), 17: (256, 74),
+    18: (256, 98), 19: (256, 50), 20: (32, 18), 21: (256, 110), 22: (256, 82),
+    23: (256, 136), 24: (1, 1), 25: (1, 2), 26: (1, 4), 27: (1, 8), 28: (1, 8),
+    29: (256, 56), 30: (1, 2), 39: (32, 17),
+}  # fmt: skip
+
+
+def tensor_bytes(path: Path) -> dict[str, int] | None:
+    """Data bytes of each tensor in a GGUF file, from its header; None when a
+    tensor has a type this table does not size.
+
+    Sizes come from each tensor's shape and type rather than offset gaps, so
+    bytes no tensor points at (a rewritten file's replaced data) count for none.
+    """
+    with open(path, "rb") as stream:
+        reader = _Reader(stream)
+        if reader.take(4) != GGUF_MAGIC:
+            raise GgufError(f"{path.name} is not a GGUF file")
+        if reader.scalar("<I") < 2:
+            raise GgufError(f"{path.name} uses an old GGUF version")
+        tensors = reader.length(_MAX_KEYS)
+        for _ in range(reader.length(_MAX_KEYS)):
+            reader.skip_string()
+            reader.value(reader.scalar("<I"), keep=False)
+        sizes: dict[str, int] = {}
+        for _ in range(tensors):
+            name = reader.string()
+            dims = [reader.scalar("<Q") for _ in range(reader.scalar("<I"))]
+            kind = reader.scalar("<I")
+            reader.scalar("<Q")  # offset
+            block = _TYPE_BLOCKS.get(kind)
+            if block is None:
+                return None
+            elements = 1
+            for dim in dims:
+                elements *= dim
+            sizes[name] = elements // block[0] * block[1]
+    return sizes
+
+
 def _int(value) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None

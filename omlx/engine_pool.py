@@ -46,6 +46,7 @@ from .engine.splash import (
     resolve_splash_target,
     splash_draft_to_download,
     splash_memory_estimate,
+    splash_min_memory_estimate,
     splash_repo_id,
 )
 from .engine.sts import STSEngine
@@ -2064,9 +2065,14 @@ class EnginePool:
     def _splash_wanted_bytes(
         self, entry: EngineEntry, model_settings: object | None, target: SplashTarget
     ) -> int:
-        """The configured Splash memory limit, or enough for the context window."""
+        """The model's Splash memory limit, else the global one, else enough
+        for the context window."""
         settings = get_global_settings().integrations
-        wanted = int((settings.splash_max_memory_gb or 0) * 1024**3)
+        limit_gb = (
+            getattr(model_settings, "splash_max_memory_gb", None)
+            or settings.splash_max_memory_gb
+        )
+        wanted = int((limit_gb or 0) * 1024**3)
         if wanted > 0:
             return wanted
         return splash_memory_estimate(
@@ -2202,11 +2208,12 @@ class EnginePool:
         # context to its budget and the server adopts what it planned.
         requested_context = getattr(model_settings, "max_context_window", None)
         budget = self._splash_memory_budget(entry, model_settings, target)
-        if requested_context and budget < splash_memory_estimate(
+        if requested_context and budget < splash_min_memory_estimate(
             entry.model_path,
             target.draft_path,
             requested_context,
             integrations.splash_kv_format,
+            target.binary,
         ):
             # The budget cannot hold the explicit limit (the room under the
             # memory limit shrank, or splash_max_memory_gb is small), and
