@@ -15,7 +15,7 @@ import mlx.nn as nn
 
 from ...patches.mlx_lm_mtp import batch_generator as bg
 from ...patches.qwen35_verify_qmm import set_verify_qmm_armed
-from . import kernels, selection, variants
+from . import kernels, lilicorr, selection, variants
 
 # Finished requests whose drafter context stays available for prefix hits.
 _KEPT_REQUESTS = 8
@@ -569,6 +569,9 @@ class DFlashDrafter:
         dtype = fc.weight.dtype if hasattr(fc, "weight") else mx.bfloat16
         if hasattr(fc, "scales"):
             dtype = fc.scales.dtype
+        if dtype not in (mx.float16, mx.bfloat16, mx.float32):
+            # NVFP4 (LiLiCorr) packs u8 scales; activations stay bf16.
+            dtype = mx.bfloat16
 
         # Context segments: keep at most ``slots`` newest tokens per row and
         # count the rest as skipped so absolute positions stay aligned. A
@@ -778,7 +781,11 @@ class DFlashDrafter:
         logits = model._logits(draft_hidden)
         samplers = [sampler for *_, sampler in rows]
         selector = getattr(model, "candidate_selector", None)
-        if markov is not None:
+        if hasattr(model, "lilicorr"):
+            proposals = lilicorr.select(
+                model, draft_hidden, logits, h_ctx, lengths, counts, samplers
+            )
+        elif markov is not None:
             proposals = selection.select_markov(markov, logits, anchors, samplers)
         elif selector is not None and selection.fused_select_eligible(
             selector, draft_hidden

@@ -16,6 +16,7 @@ rollback.
 
 from __future__ import annotations
 
+import inspect
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -48,9 +49,11 @@ def record(hidden: Any) -> None:
 
 
 def _wrap_layer(layer_cls: Any) -> None:
-    if getattr(layer_cls, "_omlx_drafter_capture_wrapped", False):
-        return
     original_call = layer_cls.__call__
+    # Checked on the function, not the class: another patch may reinstall
+    # the layer call on a later model load.
+    if getattr(original_call, "_omlx_drafter_capture", False):
+        return
 
     def __call__(self, *args, **kwargs):
         out = original_call(self, *args, **kwargs)
@@ -59,14 +62,37 @@ def _wrap_layer(layer_cls: Any) -> None:
             sink.add(out)
         return out
 
+    __call__._omlx_drafter_capture = True
+    # Keep the Nemotron-H MTP patch's marker so it does not reinstall its
+    # block call over this wrapper on the next model load.
+    if getattr(original_call, "_omlx_nh_mtp", False):
+        __call__._omlx_nh_mtp = True
     layer_cls.__call__ = __call__
-    layer_cls._omlx_drafter_capture_wrapped = True
+
+
+def _decoder_layers(model: Any):
+    """Decoder layers of an mlx-lm model (``model.layers``, or Nemotron-H's
+    ``backbone.layers``)."""
+    for attr in ("model", "backbone"):
+        layers = getattr(getattr(model, attr, None), "layers", None)
+        if layers:
+            return layers
+    return None
 
 
 def _patch_model(model_cls: Any) -> None:
     if getattr(model_cls, "_omlx_drafter_target", False):
         return
     original_call = model_cls.__call__
+    # Hybrid targets (Nemotron-H) split a verify window at n_confirmed so the
+    # Mamba rollback can restore the confirmed state; plain-attention models
+    # take no such argument.
+    try:
+        params = inspect.signature(original_call).parameters
+    except (TypeError, ValueError):
+        params = {}
+    takes_confirmed = "n_confirmed" in params
+    takes_hidden = "return_hidden" in params
 
     def __call__(
         self,
@@ -92,9 +118,17 @@ def _patch_model(model_cls: Any) -> None:
         )
         if observe:
             capture_layer_ids = list(drafter.target_layer_ids)
+        if takes_confirmed and n_confirmed:
+            kwargs["n_confirmed"] = n_confirmed
+        if drafter is None and not capture_layer_ids and takes_hidden:
+            # Another instance of a shared class (Nemotron-H Lightning with its
+            # own MTP head) keeps the original return_hidden contract.
+            if return_hidden:
+                kwargs["return_hidden"] = True
+            return original_call(self, inputs, cache, *args, **kwargs)
         if not capture_layer_ids and not return_hidden:
             return original_call(self, inputs, cache, *args, **kwargs)
-        last = len(self.model.layers) - 1
+        last = len(_decoder_layers(self)) - 1
         sink = _Sink({*(capture_layer_ids or ()), last})
         _CAPTURE.sink = sink
         try:
@@ -128,6 +162,10 @@ def _patch_model(model_cls: Any) -> None:
         self.mtp_partial_rollback(caches, accepted, int(block_size) - 1)
         return accepted
 
+    # Keep the Nemotron-H MTP patch's marker so its self-healing re-apply on a
+    # later model load treats this wrapper as its own and leaves it in place.
+    if getattr(original_call, "_omlx_nh_mtp", False):
+        __call__._omlx_nh_mtp = True
     model_cls.__call__ = __call__
     # MiMo keeps its own rollback, which checks the caches can trim first.
     if not hasattr(model_cls, "mtp_partial_rollback"):
@@ -139,7 +177,7 @@ def _patch_model(model_cls: Any) -> None:
 
 def apply(model: Any) -> bool:
     """Install the drafter hooks on ``model``'s classes. Idempotent."""
-    layers = getattr(getattr(model, "model", None), "layers", None)
+    layers = _decoder_layers(model)
     if not layers:
         return False
     for layer_cls in {type(layer) for layer in layers}:

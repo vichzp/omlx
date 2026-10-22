@@ -1372,6 +1372,9 @@ _DFLASH_BATCHED_MODEL_TYPES = {
         "laguna",
         "mimo_v2",
         "mimo_v2_flash",
+        # Nemotron 3.5 Bolt with its LiLiCorr drafter.
+        "nemotron_h",
+        "nemotron_h_puzzle",
     ),
 }
 
