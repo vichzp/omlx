@@ -169,3 +169,76 @@ class TestVerifyCapture:
 
         assert mx.allclose(conv_m, cache2[0], atol=1e-5).item()
         assert mx.allclose(ssm_m, cache2[1], atol=1e-4, rtol=1e-3).item()
+
+
+class TestSsmWrapperKeywords:
+    """The chain wrapper replaces mlx-lm's ssm_update. Newer mlx-lm (the
+    Nemotron-H Puzzle support) adds a ``promote_dt`` keyword that nemotron_h
+    passes on every call, so the wrapper must forward keywords it doesn't know
+    instead of failing with TypeError."""
+
+    def test_wrapper_accepts_extra_keywords(self):
+        import inspect
+
+        from mlx_lm.models import ssm as ssm_mod
+
+        params = inspect.signature(ssm_mod.ssm_update).parameters.values()
+        assert any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+    @staticmethod
+    def _inputs(seq_len):
+        b, h, d, g, n = 1, 4, 16, 2, 32
+        mx.random.seed(0)
+        return dict(
+            hidden_states=mx.random.normal((b, seq_len, h, d)),
+            A_log=mx.random.normal((h,)),
+            B=mx.random.normal((b, seq_len, g, n)),
+            C=mx.random.normal((b, seq_len, g, n)),
+            D=mx.random.normal((h,)),
+            dt=mx.random.normal((b, seq_len, h)),
+            dt_bias=mx.random.normal((h,)),
+            state=mx.zeros((b, h, d, n)),
+        )
+
+    def test_promote_dt_is_forwarded(self):
+        import inspect
+
+        from mlx_lm.models import ssm as ssm_mod
+
+        if "promote_dt" not in inspect.signature(ssm_mod.ssm_update_kernel).parameters:
+            pytest.skip("installed mlx-lm has no promote_dt")
+        if not mx.metal.is_available():
+            pytest.skip("needs Metal")
+        x = self._inputs(1)
+        for promote in (True, False):
+            y, s = ssm_mod.ssm_update(**x, promote_dt=promote)
+            y_ref, s_ref = ssm_mod.ssm_update_kernel(
+                *x.values(), (0.001, 100.0), promote
+            )
+            assert mx.allclose(y, y_ref).item() and mx.allclose(s, s_ref).item()
+
+        # Armed chain-verify window: per-position kernel steps get it too.
+        x = self._inputs(3)
+        nemotron_h_chain._capture.armed = True
+        try:
+            y, _ = ssm_mod.ssm_update(**x, promote_dt=False)
+        finally:
+            nemotron_h_chain._capture.armed = False
+            nemotron_h_chain._capture.ssm = None
+        s = x["state"]
+        ys = []
+        for i in range(3):
+            yi, s = ssm_mod.ssm_update_kernel(
+                x["hidden_states"][:, i : i + 1],
+                x["A_log"],
+                x["B"][:, i],
+                x["C"][:, i],
+                x["D"],
+                x["dt"][:, i : i + 1],
+                x["dt_bias"],
+                s,
+                (0.001, 100.0),
+                False,
+            )
+            ys.append(yi)
+        assert mx.allclose(y, mx.concatenate(ys, axis=1)).item()
